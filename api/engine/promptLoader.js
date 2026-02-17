@@ -1,6 +1,7 @@
 // api/engine/promptLoader.js
 // Loads prompts from GitHub raw with in-memory cache (Vercel best-effort)
 // Hardening: timeout + bounded cache + safe ref/path + retry/backoff + ETag support
+// ✅ Patch: if 404 on main, fallback once to master + include URL in errors
 
 const CACHE = new Map();
 // key: `${repo}@${ref}:${path}` -> { at:number, text:string, etag?:string }
@@ -60,7 +61,6 @@ async function fetchTextWithTimeout(url, { timeoutMs = 4500, headers = {} } = {}
       headers: { ...headers }
     });
 
-    // NOTE: raw.githubusercontent.com can respond 304 with empty body when ETag matches.
     const status = r.status;
     const etag = r.headers?.get?.("etag") || null;
 
@@ -68,18 +68,19 @@ async function fetchTextWithTimeout(url, { timeoutMs = 4500, headers = {} } = {}
     try { raw = await r.text(); } catch { raw = ""; }
 
     if (status === 304) {
-      return { text: "", etag, notModified: true };
+      return { text: "", etag, notModified: true, status };
     }
 
     if (!r.ok) {
-      throw new Error(`PROMPT_FETCH_FAILED ${r.status} ${raw.slice(0, 200)}`);
+      // ✅ include URL for debugging
+      throw new Error(`PROMPT_FETCH_FAILED ${r.status} ${url} ${raw.slice(0, 200)}`);
     }
 
     if (Buffer.byteLength(raw, "utf8") > MAX_PROMPT_BYTES) {
       throw new Error("PROMPT_TOO_LARGE");
     }
 
-    return { text: raw, etag, notModified: false };
+    return { text: raw, etag, notModified: false, status };
   } finally {
     clearTimeout(t);
   }
@@ -105,6 +106,10 @@ async function fetchWithRetry(url, { attempts = 2, timeoutMs = 4500, headers = {
         msg.includes("503") ||
         msg.includes("504");
 
+      // ✅ do NOT retry 404; it's deterministic
+      const is404 = msg.includes(" 404 ") || msg.includes("PROMPT_FETCH_FAILED 404");
+      if (is404) break;
+
       if (i < attempts - 1 && isRetryable) {
         await sleep(120 + i * 180);
         continue;
@@ -113,6 +118,31 @@ async function fetchWithRetry(url, { attempts = 2, timeoutMs = 4500, headers = {
     }
   }
   throw lastErr;
+}
+
+// ✅ helper: one optional fallback ref (main -> master) only on 404
+async function fetchPromptWithOptionalRefFallback({ repo, ref, path, cachedEtag }) {
+  const tryFetch = async (r) => {
+    const url = makeRawUrl({ repo, ref: r, path });
+    const headers = {};
+    if (cachedEtag) headers["If-None-Match"] = cachedEtag;
+    const fetched = await fetchWithRetry(url, { attempts: 2, timeoutMs: 4500, headers });
+    return { fetched, url, usedRef: r };
+  };
+
+  try {
+    return await tryFetch(ref);
+  } catch (e) {
+    const msg = String(e?.message || e);
+    const is404 = msg.includes("PROMPT_FETCH_FAILED 404");
+    if (!is404) throw e;
+
+    // only fallback if starting with main and master not already used
+    if (ref === "main") {
+      return await tryFetch("master");
+    }
+    throw e;
+  }
 }
 
 async function loadPrompt(path, opts = {}) {
@@ -129,18 +159,20 @@ async function loadPrompt(path, opts = {}) {
   const cached = CACHE.get(key);
   if (cached && (now - cached.at) < ttlMs) return cached.text;
 
-  const url = makeRawUrl({ repo, ref, path: safePath });
-
-  const headers = {};
-  if (cached?.etag) headers["If-None-Match"] = cached.etag;
-
-  let fetched;
+  let fetchedPack;
   try {
-    fetched = await fetchWithRetry(url, { attempts: 2, timeoutMs: 4500, headers });
+    fetchedPack = await fetchPromptWithOptionalRefFallback({
+      repo,
+      ref,
+      path: safePath,
+      cachedEtag: cached?.etag || null
+    });
   } catch (e) {
     if (cached?.text) return cached.text; // best-effort fallback
     throw e;
   }
+
+  const fetched = fetchedPack.fetched;
 
   if (fetched?.notModified && cached?.text) {
     boundedCacheSet(key, { at: now, text: cached.text, etag: fetched?.etag || cached?.etag || null });
