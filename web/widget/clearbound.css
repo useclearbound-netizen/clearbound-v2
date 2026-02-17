@@ -1,37 +1,382 @@
-/* web/widget/clearbound.css (minimal operational set; merge with your LOCK CSS) */
+/* =========================================================
+   ClearBound App UI — Clean Sections (LOCK-friendly)
+   ✅ PATCHED (2026-02-16)
+   - Keeps original styling intent
+   - Fixes: flag tile shadow inconsistency, hover vs active clarity,
+            secondary button affordance, post-step min-height, wider flag grids
+   ========================================================= */
+
+/* =========================================================
+   0) Base
+   ========================================================= */
 .cb-app{width:100%;max-width:none;margin:0;}
-.cb-app .card{border:1px solid rgba(0,0,0,.12);border-radius:12px;padding:46px;margin:14px 0;background:#fff;}
-@media (max-width:620px){.cb-app .card{padding:22px 18px;}}
-.cb-app .cb-quote{display:block;width:100%;margin:24px 0 34px;text-align:center;font-size:24px;line-height:1.35;font-weight:500;}
-.cb-app .progress{display:block;margin:12px 0 18px;min-height:44px;width:100%;overflow:hidden;}
-.cb-app .progressline{display:flex;align-items:center;gap:14px;flex-wrap:nowrap;}
-.cb-app .cb-stepdot{width:34px;height:34px;border-radius:999px;display:grid;place-items:center;font-weight:700;background:#fff;border:2px solid rgba(0,92,227,.55);color:rgba(0,92,227,.75);}
-.cb-app .cb-stepdot[data-state="active"],.cb-app .cb-stepdot[data-state="done"]{background:#005CE3;border-color:#005CE3;color:#fff;}
-.cb-app .cb-connector{height:6px;border-radius:999px;background:rgba(15,23,42,.10);position:relative;overflow:hidden;flex:1 1 0;min-width:6px;}
-.cb-app .cb-connector>i{position:absolute;left:0;top:0;bottom:0;width:0%;background:#005CE3;border-radius:999px;transition:width 220ms ease-out;}
+
+/* =========================================================
+   0-A) Tokens (LOCK)
+   - One source of truth for tile padding + colors
+   ========================================================= */
+:root{
+  /* Tile padding */
+  --cb-tile-pad: 22px;     /* desktop */
+  --cb-tile-pad-m: 14px;   /* mobile */
+
+  /* Tile sizing rhythm */
+  --cb-tile-gap: 12px;
+  --cb-tile-gap-m: 10px;
+  --cb-tile-radius: 12px;
+
+  /* Tile color system (unified) */
+  --cb-tile-bg: #F8F8F8;
+  --cb-tile-border: #BDBDBD;
+  --cb-tile-text: #0F172A;
+
+  --cb-tile-bg-active: #7CB0FF;
+  --cb-tile-text-active: #F8F8F8;
+
+  /* Shadows (unified) */
+  --cb-shadow-soft: 0 10px 22px rgba(15, 23, 42, .14);
+  --cb-shadow-hover-lite: 0 10px 26px rgba(15,23,42,.08);
+
+  /* Focus ring (unified) */
+  --cb-focus-ring: 0 0 0 3px rgba(0,92,227,.18);
+}
+
+/* =========================================================
+   1) Quote (Patch-3: LOCK)
+   ========================================================= */
+.cb-app .cb-quote{
+  display:block;width:100%;
+  margin:24px 0 34px;padding:0;
+  box-sizing:border-box;
+  text-align:center;
+  font-size:24px;line-height:1.35;
+  font-weight:500;letter-spacing:-0.02em;
+  color:inherit;
+  font-style:normal;background:transparent;border:0;
+}
+@media (max-width:620px){
+  .cb-app .cb-quote{font-size:17px;line-height:1.4;margin:20px 0 16px;}
+}
+
+/* =========================================================
+   2) Stepper (Patch-2: LOCK)
+   ========================================================= */
+.cb-app .progress{
+  display:block;margin:12px 0 18px;
+  min-height:44px;width:100%;
+  max-width:100%;
+  overflow:hidden; /* LOCK */
+}
+.cb-app .progressline{
+  display:flex;align-items:center;
+  flex-wrap:nowrap;min-width:0;
+  gap:14px;user-select:none;
+}
+.cb-app .cb-stepdot{
+  width:34px;height:34px;border-radius:999px;
+  display:grid;place-items:center;
+  font-weight:700;font-size:14px;
+  box-sizing:border-box;
+  background:#fff;
+  border:2px solid rgba(0,92,227,.55);
+  color:rgba(0,92,227,.75);
+  flex:0 0 auto;
+  pointer-events:none;
+}
+.cb-app .cb-stepdot[data-state="active"],
+.cb-app .cb-stepdot[data-state="done"]{
+  background:#005CE3;border-color:#005CE3;color:#fff; /* LOCK */
+}
+.cb-app .cb-connector{
+  height:6px;border-radius:999px;
+  background:rgba(15,23,42,.10);
+  position:relative;overflow:hidden;
+  flex:1 1 0;min-width:6px; /* LOCK */
+}
+.cb-app .cb-connector > i{
+  position:absolute;left:0;top:0;bottom:0;
+  width:0%;
+  background:#005CE3;border-radius:999px;
+  transition:width 220ms ease-out;
+}
+@media (max-width:620px){
+  .cb-app .progressline{gap:6px;}
+  .cb-app .cb-stepdot{width:26px;height:26px;font-size:12px;}
+  .cb-app .cb-connector{height:3px;min-width:4px;}
+}
+@media (max-width:390px){
+  .cb-app .progressline{gap:4px;}
+  .cb-app .cb-stepdot{width:24px;height:24px;font-size:11px;}
+  .cb-app .cb-connector{min-width:3px;}
+}
+
+/* =========================================================
+   3) Cards (containers)
+   ========================================================= */
+.cb-app .card{
+  border:1px solid rgba(0,0,0,.12);
+  border-radius:12px;
+  padding:46px;margin:14px 0;
+  background:#fff;
+}
+
+/* PATCH: reduce forced empty space for shorter screens */
+.cb-app .card[data-cb-host]{min-height:240px;}
+@media (max-width:620px){
+  .cb-app .card{padding:22px 18px;}
+  .cb-app .card[data-cb-host]{min-height:unset;}
+}
+
+/* =========================================================
+   4) Step headings (Patch-4)
+   ========================================================= */
 .cb-app .cb-stephead{margin:0 0 10px;}
-.cb-app .cb-stepkicker{font-size:13px;font-weight:800;opacity:.75;margin:0 0 6px;}
-.cb-app .cb-stepq{margin:0;font-size:26px;line-height:1.2;font-weight:600;}
-.cb-app .help{font-size:15px;opacity:.78;margin-top:10px;line-height:1.45;font-weight:600;}
-.cb-app label{display:block;font-weight:600;font-size:16px;margin:24px 0 12px;}
-.cb-app input[type="text"], .cb-app textarea{width:100%;padding:12px 14px;border-radius:12px;border:1px solid rgba(0,0,0,.18);font-size:14px;box-sizing:border-box;}
+.cb-app .cb-stepkicker{
+  font-size:13px;font-weight:800;
+  opacity:.75;letter-spacing:-0.01em;
+  margin:0 0 6px;
+}
+.cb-app .cb-stepq{
+  margin:0;font-size:26px;line-height:1.2;
+  font-weight:600;letter-spacing:-0.02em;
+}
+@media (max-width:620px){
+  .cb-app .cb-stepq{font-size:22px;}
+  .cb-app .cb-stepkicker{font-size:12px;}
+}
+
+/* =========================================================
+   5) Help + inputs (LOCK rhythm)
+   ========================================================= */
+.cb-app .help{
+  font-size:15px;opacity:.78;margin-top:10px;
+  line-height:1.45;font-weight:600;
+}
+@media (max-width:620px){
+  .cb-app .help{font-size:14px;}
+}
+.cb-app label{
+  display:block;font-weight:600;
+  font-size:16px;margin:24px 0 12px;
+}
+.cb-app select,
+.cb-app input[type="text"],
+.cb-app textarea{
+  width:100%;
+  padding:12px 14px;
+  border-radius:12px;
+  border:1px solid rgba(0,0,0,.18);
+  background:#fff;
+  font-size:14px;line-height:1.5;
+  box-sizing:border-box;
+}
 .cb-app textarea{min-height:120px;resize:vertical;}
-.cb-app .cb-tilegrid{display:grid;grid-template-columns:1fr;gap:12px;margin-top:16px;}
-.cb-app .cb-tile{border:1px solid rgba(0,0,0,.18);border-radius:12px;background:#F8F8F8;color:#0F172A;padding:18px;cursor:pointer;user-select:none;transition:background-color 180ms ease-out, color 180ms ease-out;}
-.cb-app .cb-tile[data-active="true"]{background:#7CB0FF;color:#fff;border-color:transparent;}
-.cb-app .cb-tile .cb-tile-label{font-size:16px;font-weight:600;}
-.cb-app .cb-tile .cb-tile-desc{font-size:13px;font-weight:600;opacity:.82;margin-top:6px;}
-.cb-app .cb-flaggrid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px;}
-@media (max-width:620px){.cb-app .cb-flaggrid{grid-template-columns:1fr;}}
-.cb-app .cb-flag-tile{border:1px solid rgba(0,0,0,.18);background:#F8F8F8;border-radius:12px;padding:14px;cursor:pointer;}
-.cb-app .cb-flag-tile[data-active="true"]{background:#7CB0FF;color:#fff;border-color:transparent;}
-.cb-app .cb-flag-title{font-size:15px;font-weight:700;}
-.cb-app .cb-flag-desc{font-size:13px;font-weight:600;opacity:.78;margin-top:6px;}
-.cb-app .nav{display:flex;justify-content:space-between;gap:10px;margin-top:50px;align-items:center;}
-.cb-app button{appearance:none;border:0;border-radius:18px;padding:16px 28px;font-weight:600;font-size:16px;cursor:pointer;}
-.cb-app .cb-btn-primary{background:#005CE3;color:#F8F8F8;}
-.cb-app .cb-btn-secondary{background:#F8F8F8;color:#0F172A;border:1px solid rgba(0,0,0,.14);}
-.cb-app button:disabled{opacity:.45;cursor:not-allowed;pointer-events:none;}
-.cb-app .mono{font-family:ui-monospace,Menlo,Monaco,Consolas,monospace;font-size:14px;line-height:1.55;white-space:pre-wrap;overflow-wrap:anywhere;}
+
+/* =========================================================
+   6) Tile system — Grid (base)
+   ========================================================= */
+.cb-app .cb-tilegrid{
+  display:grid;
+  grid-template-columns:repeat(5,minmax(0,1fr));
+  gap:var(--cb-tile-gap);
+  margin-top:16px;
+}
+@media (max-width:900px){
+  .cb-app .cb-tilegrid{grid-template-columns:repeat(3,minmax(0,1fr));}
+}
+@media (max-width:620px){
+  .cb-app .cb-tilegrid{
+    grid-template-columns:1fr;
+    gap:var(--cb-tile-gap-m);
+  }
+}
+
+/* =========================================================
+   6-A) Tile system — Tile (unified base)
+   ========================================================= */
+.cb-app .cb-tile{
+  border:1px solid var(--cb-tile-border);
+  border-radius:var(--cb-tile-radius);
+  background:var(--cb-tile-bg);
+  color:var(--cb-tile-text);
+
+  padding:var(--cb-tile-pad);
+
+  cursor:pointer;user-select:none;
+  display:flex;flex-direction:column;
+  align-items:center;justify-content:center;
+  gap:10px;
+
+  box-shadow:none;
+  transform:none;
+
+  transition:
+    box-shadow 180ms ease-out,
+    border-color 180ms ease-out,
+    background-color 180ms ease-out,
+    color 180ms ease-out,
+    transform 120ms ease-out;
+  outline:none;
+}
+
+.cb-app .cb-tile:hover{
+  background:rgba(124,176,255,.55);
+  color:var(--cb-tile-text);
+  border-color:rgba(0,0,0,.08);
+  box-shadow:var(--cb-shadow-hover-lite);
+}
+.cb-app .cb-tile[data-active="true"]{
+  background:var(--cb-tile-bg-active);
+  color:var(--cb-tile-text-active);
+  border-color:transparent;
+  box-shadow:var(--cb-shadow-soft);
+}
+.cb-app .cb-tile:focus{
+  box-shadow: var(--cb-focus-ring), var(--cb-shadow-soft);
+}
+.cb-app .cb-tile .cb-tile-label{
+  font-size:16px;font-weight:600;line-height:1.2;
+  min-height:40px;
+  display:flex;align-items:center;justify-content:center;
+  text-align:center;
+  color:inherit;
+}
+.cb-app .cb-tile .cb-tile-desc{
+  font-size:13px;
+  font-weight:600;
+  line-height:1.35;
+  opacity:.82;
+  text-align:center;
+  color:inherit;
+}
+.cb-app .cb-tile .cb-tile-meta{
+  font-size:13px;
+  font-weight:800;
+  opacity:.90;
+  color:inherit;
+}
+@media (max-width:620px){
+  .cb-app .cb-tile{
+    padding:var(--cb-tile-pad-m);
+    flex-direction:row;
+    justify-content:flex-start;
+    gap:12px;
+  }
+  .cb-app .cb-tile .cb-tile-label{
+    font-size:15px;
+    text-align:left;
+    justify-content:flex-start;
+    min-height:auto;
+  }
+  .cb-app .cb-tile .cb-tile-desc{
+    text-align:left;
+  }
+}
+
+/* =========================================================
+   10) Flags (multi-select)
+   ========================================================= */
+.cb-app .cb-flaggrid{
+  display:grid;
+  grid-template-columns:1fr 1fr;
+  gap:10px;margin-top:10px;
+}
+@media (max-width:620px){
+  .cb-app .cb-flaggrid{grid-template-columns:1fr;}
+}
+@media (min-width:980px){
+  .cb-app .cb-flaggrid{grid-template-columns:repeat(3,minmax(0,1fr));}
+}
+
+.cb-app .cb-flag-tile{
+  border:1px solid var(--cb-tile-border);
+  background:var(--cb-tile-bg);
+  color:var(--cb-tile-text);
+
+  border-radius:12px;
+  padding:var(--cb-tile-pad-m);
+  cursor:pointer;user-select:none;
+
+  box-shadow:none;
+
+  transition:
+    box-shadow 180ms ease-out,
+    border-color 180ms ease-out,
+    background-color 180ms ease-out,
+    color 180ms ease-out,
+    transform 120ms ease-out;
+  outline:none;
+  position:relative;
+  display:flex;flex-direction:column;gap:6px;
+}
+.cb-app .cb-flag-tile:hover{
+  background:rgba(124,176,255,.55);
+  color:var(--cb-tile-text);
+  border-color:rgba(0,0,0,.08);
+  box-shadow:var(--cb-shadow-hover-lite);
+  transform:translateY(-1px);
+}
+.cb-app .cb-flag-tile:active{transform:translateY(0);}
+.cb-app .cb-flag-tile[data-active="true"]{
+  background:var(--cb-tile-bg-active);
+  color:var(--cb-tile-text-active);
+  border-color:transparent;
+  box-shadow:var(--cb-shadow-soft);
+}
+.cb-app .cb-flag-title{font-size:15px;font-weight:700;line-height:1.2;color:inherit;}
+.cb-app .cb-flag-desc{font-size:13px;font-weight:600;opacity:.78;line-height:1.35;color:inherit;}
+
+.cb-app .mono{
+  font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono","Courier New",monospace;
+  font-size:14px;line-height:1.55;
+  white-space:pre-wrap;overflow-wrap:anywhere;
+  word-break:break-word;hyphens:auto;
+}
+@media (max-width:620px){.cb-app .mono{font-size:13px;}}
 .cb-app .warn{padding:12px 14px;border-radius:12px;background:rgba(255,193,7,.18);border:1px solid rgba(255,193,7,.45);margin-top:14px;}
 .cb-app .ok{padding:12px 14px;border-radius:12px;background:rgba(40,167,69,.14);border:1px solid rgba(40,167,69,.35);margin-top:14px;}
+
+.cb-app .nav{
+  display:flex;
+  justify-content:space-between;
+  gap:10px;margin-top:50px;
+  align-items:center;
+}
+.cb-app .cb-nav-left,.cb-app .cb-nav-right{
+  flex:0 0 auto;display:flex;align-items:center;
+}
+.cb-app .cb-nav-left{min-width:1px;}
+.cb-app .cb-nav-right{margin-left:auto;}
+
+.cb-app button{
+  appearance:none;-webkit-appearance:none;
+  border:0 !important;outline:none;
+  border-radius:18px !important;
+  padding:16px 28px !important;
+  font-family:Inter,system-ui,-apple-system,"Segoe UI",Roboto,Arial,sans-serif !important;
+  font-weight:600 !important;
+  font-size:16px !important;
+  line-height:1 !important;
+  cursor:pointer;
+  transition:background-color 180ms ease-out, color 180ms ease-out, opacity 180ms ease-out, border-color 180ms ease-out;
+}
+@media (max-width:620px){
+  .cb-app button{padding:16px 18px !important;font-size:15px !important;}
+}
+.cb-app .cb-btn-primary{background:#005CE3 !important;color:#F8F8F8 !important;}
+.cb-app .cb-btn-primary:hover{background:#1C78FF !important;color:#F8F8F8 !important;}
+
+.cb-app .cb-btn-secondary{
+  background:#F8F8F8 !important;
+  color:#0F172A !important;
+  border:1px solid rgba(0,0,0,.14) !important;
+}
+.cb-app .cb-btn-secondary:hover{
+  background:#0F172A !important;
+  color:#F8F8F8 !important;
+  border-color:transparent !important;
+}
+.cb-app button:disabled{
+  opacity:.45 !important;cursor:not-allowed !important;
+  pointer-events:none !important;transition:none !important;
+}
