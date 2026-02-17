@@ -3,7 +3,8 @@
 // + Insight returns as an object (for UI rendering + human-friendly download formatting)
 // + QC gate + one repair attempt
 // ✅ FIXES
-// - Prompts path aligned to repo: api/prompts/v2/*
+// - PROMPT path aligned to repo: api/prompts/v2/*.prompt.md
+// - PROMPTS_REF "master" -> auto fallback to "main" once if 404
 // - QC_FAILED returns 422 (not 502)
 // - One repair attempt when QC fails (temperature 0)
 // - Better diagnostics: issues returned to UI
@@ -28,7 +29,7 @@ function getAllowedOrigin() {
 function isOriginAllowed(reqOrigin, allow) {
   if (!reqOrigin) return true; // allow server-to-server
   if (allow === "*") return true;
-  const allowed = allow.split(",").map((s) => s.trim()).filter(Boolean);
+  const allowed = allow.split(",").map(s => s.trim()).filter(Boolean);
   return allowed.includes(reqOrigin);
 }
 
@@ -70,7 +71,6 @@ async function readRawBody(req, maxBytes = 200_000) {
 function pickModel(engine, include_analysis) {
   const modelDefault = process.env.MODEL_DEFAULT || "gpt-4.1-mini";
   const modelHighRisk = process.env.MODEL_HIGH_RISK || "gpt-4.1";
-  // 환경변수 이름 혼선 방지: MODEL_INSIGHT도 허용
   const modelAnalysis =
     process.env.MODEL_ANALYSIS ||
     process.env.MODEL_INSIGHT ||
@@ -81,14 +81,7 @@ function pickModel(engine, include_analysis) {
   return modelDefault;
 }
 
-async function openaiChat({
-  model,
-  system,
-  user,
-  timeoutMs = 22_000,
-  requestId = "",
-  temperature = 0.2
-}) {
+async function openaiChat({ model, system, user, timeoutMs = 22_000, requestId = "", temperature = 0.2 }) {
   const key = process.env.OPENAI_API_KEY;
   if (!key) throw new Error("OPENAI_API_KEY missing");
 
@@ -100,9 +93,9 @@ async function openaiChat({
       method: "POST",
       signal: ac.signal,
       headers: {
-        Authorization: `Bearer ${key}`,
+        "Authorization": `Bearer ${key}`,
         "Content-Type": "application/json",
-        ...(requestId ? { "X-Request-Id": requestId } : {}),
+        ...(requestId ? { "X-Request-Id": requestId } : {})
       },
       body: JSON.stringify({
         model,
@@ -110,9 +103,9 @@ async function openaiChat({
         response_format: { type: "json_object" },
         messages: [
           { role: "system", content: system },
-          { role: "user", content: user },
-        ],
-      }),
+          { role: "user", content: user }
+        ]
+      })
     });
 
     const raw = await r.text();
@@ -138,25 +131,22 @@ function buildPayload(state) {
 
   const ctx = s?.context || {};
   const risk_scan = ctx.risk_scan || s?.risk_scan || {};
-  const situation_type =
-    ctx.situation_type ||
-    s?.context_builder?.situation_type ||
-    null;
+  const situation_type = ctx.situation_type || (s?.context_builder?.situation_type) || null;
 
   const key_facts =
     ctx.key_facts ||
-    s?.context_builder?.key_facts ||
+    (s?.context_builder?.key_facts) ||
     s?.facts?.what_happened ||
     "";
 
   const main_concerns =
     ctx.main_concerns ||
-    s?.context_builder?.main_concerns ||
+    (s?.context_builder?.main_concerns) ||
     [];
 
   const constraints =
     ctx.constraints ||
-    s?.context_builder?.constraints ||
+    (s?.context_builder?.constraints) ||
     [];
 
   // v2 premium state mappings
@@ -199,12 +189,12 @@ function buildPayload(state) {
       situation_type,
       risk_scan: {
         impact: risk_scan.impact || null,
-        continuity: risk_scan.continuity || null,
+        continuity: risk_scan.continuity || null
       },
       continuity,
       happened_before,
       exposure: Array.isArray(exposure) ? exposure : (exposure == null ? null : []),
-      leverage_flag: typeof leverage_flag === "boolean" ? leverage_flag : null,
+      leverage_flag: (typeof leverage_flag === "boolean") ? leverage_flag : null,
 
       key_facts: String(key_facts || ""),
       main_concerns: Array.isArray(main_concerns) ? main_concerns : [],
@@ -236,8 +226,8 @@ function buildPayload(state) {
         s?.action_objective?.value ||
         s?.action_objective ||
         s?.strategy?.action_objective ||
-        null,
-    },
+        null
+    }
   };
 }
 
@@ -247,7 +237,7 @@ function resolveFinalControls(payload, engine) {
     tone: inp.tone || engine.tone_recommendation || "neutral",
     detail: inp.detail || engine.detail_recommendation || "standard",
     direction: inp.direction || engine.direction_suggestion || "reset",
-    action_objective: inp.action_objective || null,
+    action_objective: inp.action_objective || null
   };
 }
 
@@ -256,7 +246,7 @@ function systemPreamble() {
     "You are ClearBound.",
     "You generate structured communication drafts.",
     "You do not provide advice, do not predict outcomes, do not use legal framing.",
-    "Return ONE JSON object only. No markdown. No extra text.",
+    "Return ONE JSON object only. No markdown. No extra text."
   ].join("\n");
 }
 
@@ -277,14 +267,35 @@ function makeRepairInstruction(packageType, issues) {
     "",
     `PACKAGE: ${packageType}`,
     "QC ISSUES TO FIX:",
-    ...issues.map((x) => `- ${x}`),
+    ...issues.map(x => `- ${x}`),
     "",
     "NON-NEGOTIABLE:",
     "- Preserve the same intent, facts, and posture.",
     "- Do NOT add threats, legal framing, or accusations.",
     "- Use clean blank lines between paragraphs/sections as required.",
-    "- Return only JSON.",
+    "- Return only JSON."
   ].join("\n");
+}
+
+async function loadPromptWithRefFallback(path) {
+  // Primary: env PROMPTS_REF (promptLoader reads it). Fallback: main if 404-ish.
+  try {
+    return await loadPrompt(path);
+  } catch (e) {
+    const msg = String(e?.message || e);
+    const ref = String(process.env.PROMPTS_REF || "main").trim();
+    const is404 = msg.includes("404") || msg.includes("Not Found") || msg.includes("PROMPT_FETCH_FAILED 404");
+
+    // Common failure: ref=master while repo uses main
+    if (is404 && ref === "master") {
+      try {
+        return await loadPrompt(path, { ref: "main" });
+      } catch (e2) {
+        throw e2;
+      }
+    }
+    throw e;
+  }
 }
 
 module.exports = async (req, res) => {
@@ -318,9 +329,7 @@ module.exports = async (req, res) => {
       body = safeParseJson(raw);
     } catch (e) {
       const msg = String(e?.message || e);
-      if (msg.includes("BODY_TOO_LARGE")) {
-        return json(res, 413, { ok: false, error: "BODY_TOO_LARGE" });
-      }
+      if (msg.includes("BODY_TOO_LARGE")) return json(res, 413, { ok: false, error: "BODY_TOO_LARGE" });
       return json(res, 400, { ok: false, error: "BAD_REQUEST", message: "Invalid body" });
     }
   } else if (typeof body === "string") {
@@ -354,13 +363,14 @@ module.exports = async (req, res) => {
     continuity: payload.input.continuity,
     happened_before: payload.input.happened_before,
     exposure: payload.input.exposure,
-    leverage_flag: payload.input.leverage_flag,
+    leverage_flag: payload.input.leverage_flag
   });
 
   const controls = resolveFinalControls(payload, engine);
   const model = pickModel(engine, payload.include_analysis);
 
-  // 2) Load prompts (✅ repo 구조에 맞게 수정)
+  // 2) Load prompts
+  // ✅ IMPORTANT: prompts live at repo-root: api/prompts/v2/*.prompt.md
   const basePath = "api/prompts/v2";
   const promptPath =
     payload.package === "message" ? `${basePath}/message.prompt.md` :
@@ -374,13 +384,9 @@ module.exports = async (req, res) => {
 
   let mainPrompt;
   try {
-    mainPrompt = await loadPrompt(promptPath);
+    mainPrompt = await loadPromptWithRefFallback(promptPath);
   } catch (e) {
-    return json(res, 500, {
-      ok: false,
-      error: "PROMPT_LOAD_FAILED",
-      message: String(e?.message || e),
-    });
+    return json(res, 500, { ok: false, error: "PROMPT_LOAD_FAILED", message: String(e?.message || e) });
   }
 
   // 3) Build LLM input
@@ -392,9 +398,9 @@ module.exports = async (req, res) => {
       tone: controls.tone,
       detail: controls.detail,
       direction: controls.direction,
-      action_objective: controls.action_objective,
+      action_objective: controls.action_objective
     },
-    engine,
+    engine
   };
 
   const requestId = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
@@ -410,16 +416,12 @@ module.exports = async (req, res) => {
       user: userBlock,
       timeoutMs: 22_000,
       requestId,
-      temperature: userOverride ? 0 : 0.2,
+      temperature: userOverride ? 0 : 0.2
     });
 
     const obj = safeParseJson(text);
     if (!obj || typeof obj !== "object") {
-      return {
-        ok: false,
-        error: "MODEL_RETURNED_NON_JSON",
-        raw: String(text || "").slice(0, 1200),
-      };
+      return { ok: false, error: "MODEL_RETURNED_NON_JSON", raw: String(text || "").slice(0, 1200) };
     }
     return { ok: true, obj };
   }
@@ -429,19 +431,13 @@ module.exports = async (req, res) => {
   try {
     const first = await runMainGeneration();
     if (!first.ok) {
-      return json(res, 502, {
-        ok: false,
-        error: first.error,
-        message: "Model output was not valid JSON",
-        raw: first.raw,
-      });
+      return json(res, 502, { ok: false, error: first.error, message: "Model output was not valid JSON", raw: first.raw });
     }
 
     const qc1 = validateOutput(payload.package, first.obj, controls);
     if (qc1.ok) {
       mainObj = first.obj;
     } else {
-      // repair attempt (1x)
       const repairInstr = makeRepairInstruction(payload.package, qc1.issues);
       const second = await runMainGeneration(repairInstr);
 
@@ -450,7 +446,7 @@ module.exports = async (req, res) => {
           ok: false,
           error: "QC_FAILED",
           message: "QC failed and repair output was not valid JSON",
-          issues: qc1.issues,
+          issues: qc1.issues
         });
       }
 
@@ -460,7 +456,7 @@ module.exports = async (req, res) => {
           ok: false,
           error: "QC_FAILED",
           message: "QC failed after repair",
-          issues: qc2.issues,
+          issues: qc2.issues
         });
       }
 
@@ -472,7 +468,7 @@ module.exports = async (req, res) => {
     return json(res, 502, {
       ok: false,
       error: isTimeout ? "GENERATION_TIMEOUT" : "GENERATION_FAILED",
-      message: msg,
+      message: msg
     });
   }
 
@@ -482,20 +478,16 @@ module.exports = async (req, res) => {
     email_text: mainObj.email_text || null,
     subject: mainObj.subject || null,
     insight: null,
-    analysis_text: null,
+    analysis_text: null
   };
 
   // 5) Optional Insight call + QC
   if (payload.include_analysis) {
     let insightPrompt;
     try {
-      insightPrompt = await loadPrompt(`${basePath}/insight.prompt.md`);
+      insightPrompt = await loadPromptWithRefFallback(`${basePath}/insight.prompt.md`);
     } catch (e) {
-      return json(res, 500, {
-        ok: false,
-        error: "INSIGHT_PROMPT_LOAD_FAILED",
-        message: String(e?.message || e),
-      });
+      return json(res, 500, { ok: false, error: "INSIGHT_PROMPT_LOAD_FAILED", message: String(e?.message || e) });
     }
 
     let insightObj = null;
@@ -507,29 +499,29 @@ module.exports = async (req, res) => {
         user: `${insightPrompt}\n\n---\n\nPAYLOAD_JSON:\n${JSON.stringify(llmInput)}`,
         timeoutMs: 16_000,
         requestId: `${requestId}-insight`,
-        temperature: 0.2,
+        temperature: 0.2
       });
 
       const parsed = safeParseJson(insightText);
       if (parsed && typeof parsed === "object") insightObj = parsed;
+
     } catch (e) {
       const msg = String(e?.message || e);
       const isTimeout = msg.includes("aborted") || msg.includes("AbortError");
       return json(res, 502, {
         ok: false,
         error: isTimeout ? "INSIGHT_TIMEOUT" : "INSIGHT_FAILED",
-        message: msg,
+        message: msg
       });
     }
 
-    // QC insight (no repair here by default)
     const iq = validateInsight(insightObj);
     if (iq.length) {
       return json(res, 422, {
         ok: false,
         error: "INSIGHT_QC_FAILED",
         message: "Insight QC failed",
-        issues: iq,
+        issues: iq
       });
     }
 
