@@ -2,12 +2,12 @@
 // Full replace: strict CORS gate + robust body parsing + prompt repo support + JSON enforcement
 // + Insight returns as an object (for UI rendering + human-friendly download formatting)
 // + QC gate + one repair attempt
-// ✅ FIXES
-// - Uses repo prompt path: prompts/v2/*.prompt.md (matches clearbound-v2 repo structure)
+// ✅ FIXES (2026-02-16)
+// - PROMPT path aligned to repo: prompts/v2/*.prompt.md
 // - QC_FAILED returns 422 (not 502)
 // - One repair attempt when QC fails (temperature 0)
-// - Better diagnostics: issues returned to UI
-// - MODEL_INSIGHT env supported (alias)
+// - Repair prompt includes the previous (failed) JSON output
+// - QC pre-coercion: accept common alternative keys and normalize BEFORE QC
 
 const { computeEngineDecisions } = require("../engine/compute");
 const { loadPrompt } = require("../engine/promptLoader");
@@ -81,14 +81,7 @@ function pickModel(engine, include_analysis) {
   return modelDefault;
 }
 
-async function openaiChat({
-  model,
-  system,
-  user,
-  timeoutMs = 22_000,
-  requestId = "",
-  temperature = 0.2
-}) {
+async function openaiChat({ model, system, user, timeoutMs = 22_000, requestId = "", temperature = 0.2 }) {
   const key = process.env.OPENAI_API_KEY;
   if (!key) throw new Error("OPENAI_API_KEY missing");
 
@@ -198,7 +191,6 @@ function buildPayload(state) {
         impact: risk_scan.impact || null,
         continuity: risk_scan.continuity || null
       },
-
       continuity,
       happened_before,
       exposure: Array.isArray(exposure) ? exposure : (exposure == null ? null : []),
@@ -229,7 +221,6 @@ function buildPayload(state) {
         s?.strategy?.direction ||
         null,
 
-      // used by QC objective detection
       action_objective:
         s?.action_objective?.value ||
         s?.action_objective ||
@@ -267,20 +258,77 @@ function isJsonRequest(req) {
   return ct.includes("application/json");
 }
 
-function makeRepairInstruction(packageType, issues) {
+// Normalize common alternative keys BEFORE QC so QC doesn't fail on naming drift
+function coerceForQc(packageType, obj) {
+  const o = (obj && typeof obj === "object") ? obj : {};
+  if (packageType === "message") {
+    return {
+      ...o,
+      message_text:
+        o.message_text ??
+        o.bundle_message_text ??
+        o.message ??
+        o.text ??
+        o.output ??
+        null
+    };
+  }
+  if (packageType === "email") {
+    return {
+      ...o,
+      subject: o.subject ?? o.email_subject ?? null,
+      email_text:
+        o.email_text ??
+        o.email ??
+        o.text ??
+        o.output ??
+        null
+    };
+  }
+  if (packageType === "bundle") {
+    return {
+      ...o,
+      bundle_message_text:
+        o.bundle_message_text ??
+        o.message_text ??
+        o.message ??
+        null,
+      subject: o.subject ?? o.email_subject ?? null,
+      email_text:
+        o.email_text ??
+        o.email ??
+        null
+    };
+  }
+  return o;
+}
+
+function makeRepairInstruction(packageType, issues, failedObj) {
+  const schema =
+    packageType === "message"
+      ? `{"message_text":"(string)","meta":{"tone":"(string)","detail":"(string)","direction":"(string)"}}`
+      : packageType === "email"
+      ? `{"subject":"(string)","email_text":"(string)","meta":{"tone":"(string)","detail":"(string)","direction":"(string)"}}`
+      : `{"bundle_message_text":"(string)","subject":"(string)","email_text":"(string)","meta":{"tone":"(string)","detail":"(string)","direction":"(string)"}}`;
+
   return [
     "REPAIR TASK:",
-    "You previously returned JSON that failed QC.",
-    "Fix the output to satisfy ALL constraints below, and return ONE JSON object only.",
+    "Return ONE JSON object only.",
     "",
     `PACKAGE: ${packageType}`,
+    `REQUIRED JSON SCHEMA EXAMPLE: ${schema}`,
+    "",
     "QC ISSUES TO FIX:",
     ...issues.map(x => `- ${x}`),
+    "",
+    "YOUR PREVIOUS (FAILED) JSON OUTPUT:",
+    JSON.stringify(failedObj || {}, null, 2),
     "",
     "NON-NEGOTIABLE:",
     "- Preserve the same intent, facts, and posture.",
     "- Do NOT add threats, legal framing, or accusations.",
     "- Use clean blank lines between paragraphs/sections as required.",
+    "- Use the EXACT key names in the schema (message_text / email_text / bundle_message_text / subject).",
     "- Return only JSON."
   ].join("\n");
 }
@@ -334,7 +382,7 @@ module.exports = async (req, res) => {
     return json(res, 400, { ok: false, error: "MISSING_PACKAGE" });
   }
 
-  // Facts min gate (UI is 40; keep server gate aligned)
+  // Facts min gate (UI is 40; keep aligned)
   const facts = (payload.input.key_facts || "").trim();
   if (facts.length < 40) {
     return json(res, 400, { ok: false, error: "MISSING_FACTS", message: "Facts too short" });
@@ -356,7 +404,7 @@ module.exports = async (req, res) => {
   const controls = resolveFinalControls(payload, engine);
   const model = pickModel(engine, payload.include_analysis);
 
-  // 2) Load prompts (✅ matches repo: prompts/v2/*.prompt.md)
+  // 2) Load prompts (✅ repo has prompts/v2/*)
   const basePath = "prompts/v2";
   const promptPath =
     payload.package === "message" ? `${basePath}/message.prompt.md` :
@@ -391,7 +439,7 @@ module.exports = async (req, res) => {
 
   const requestId = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 
-  async function runMainGeneration(userOverride = "") {
+  async function runMainGeneration(userOverride = "", prevFailedObj = null) {
     const userBlock = userOverride
       ? `${userOverride}\n\n---\n\nPAYLOAD_JSON:\n${JSON.stringify(llmInput)}`
       : `${mainPrompt}\n\n---\n\nPAYLOAD_JSON:\n${JSON.stringify(llmInput)}`;
@@ -409,7 +457,10 @@ module.exports = async (req, res) => {
     if (!obj || typeof obj !== "object") {
       return { ok: false, error: "MODEL_RETURNED_NON_JSON", raw: String(text || "").slice(0, 1200) };
     }
-    return { ok: true, obj };
+
+    // coercion BEFORE QC
+    const coerced = coerceForQc(payload.package, obj);
+    return { ok: true, obj: coerced, rawObj: obj };
   }
 
   // 4) Main generation call + QC + 1 repair attempt
@@ -417,21 +468,16 @@ module.exports = async (req, res) => {
   try {
     const first = await runMainGeneration();
     if (!first.ok) {
-      return json(res, 502, {
-        ok: false,
-        error: first.error,
-        message: "Model output was not valid JSON",
-        raw: first.raw
-      });
+      return json(res, 502, { ok: false, error: first.error, message: "Model output was not valid JSON", raw: first.raw });
     }
 
     const qc1 = validateOutput(payload.package, first.obj, controls);
     if (qc1.ok) {
       mainObj = first.obj;
     } else {
-      // repair attempt (1x)
-      const repairInstr = makeRepairInstruction(payload.package, qc1.issues);
-      const second = await runMainGeneration(repairInstr);
+      // repair attempt (1x) — include failed output
+      const repairInstr = makeRepairInstruction(payload.package, qc1.issues, first.rawObj || first.obj);
+      const second = await runMainGeneration(repairInstr, first.rawObj || first.obj);
 
       if (!second.ok) {
         return json(res, 422, {
@@ -464,7 +510,7 @@ module.exports = async (req, res) => {
     });
   }
 
-  // Normalize output
+  // Normalize output for UI
   const out = {
     message_text: mainObj.message_text || mainObj.bundle_message_text || null,
     email_text: mainObj.email_text || null,
@@ -479,11 +525,7 @@ module.exports = async (req, res) => {
     try {
       insightPrompt = await loadPrompt(`${basePath}/insight.prompt.md`);
     } catch (e) {
-      return json(res, 500, {
-        ok: false,
-        error: "INSIGHT_PROMPT_LOAD_FAILED",
-        message: String(e?.message || e)
-      });
+      return json(res, 500, { ok: false, error: "INSIGHT_PROMPT_LOAD_FAILED", message: String(e?.message || e) });
     }
 
     let insightObj = null;
