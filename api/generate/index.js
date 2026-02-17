@@ -8,13 +8,11 @@
 // - One repair attempt when QC fails (temperature 0)
 // - Repair prompt includes the previous (failed) JSON output
 // - QC pre-coercion: accept common alternative keys and normalize BEFORE QC
-//
-// ✅ SPEED + RELIABILITY PATCH (2026-02-17)
-// - Deterministic normalization BEFORE QC (no extra LLM calls):
-//   * message paragraphs => exactly 3
-//   * email sections => exactly 4
-// - Ensure meta exists & is consistent with controls before QC
-// - MODEL_RETURNED_NON_JSON => 422 (format failure), not 502
+// ✅ FIXES (2026-02-17)
+// - v2 premium frontend payload passthrough: target/relationship/signals/facts/strategy injected into llmInput.input
+// - signals → normalized risk_scan/leverage_flag/record_safe_mode token mapping
+// - facts.key_refs included
+// - preserves existing engine/QC compatibility fields (key_facts, tone/detail/direction/action_objective, etc.)
 
 const { computeEngineDecisions } = require("../engine/compute");
 const { loadPrompt } = require("../engine/promptLoader");
@@ -133,16 +131,54 @@ async function openaiChat({ model, system, user, timeoutMs = 22_000, requestId =
 
 function buildPayload(state) {
   const s = state || {};
-  const paywall = s?.context?.paywall || s?.paywall || {};
+  const ctx = s?.context || {};
+
+  // paywall (front v2 premium uses s.paywall; keep ctx fallback)
+  const paywall = ctx?.paywall || s?.paywall || {};
   const pkg = paywall.package || null;
 
-  const ctx = s?.context || {};
-  const risk_scan = ctx.risk_scan || s?.risk_scan || {};
-  const situation_type = ctx.situation_type || (s?.context_builder?.situation_type) || null;
+  // v2 premium passthrough blocks
+  const target = s?.target || null;
+  const relationship = s?.relationship || null;
+  const signals = s?.signals || null;
 
+  const factsObj = s?.facts || {};
+  const strategyObj = s?.strategy || {};
+
+  const what_happened = String(factsObj?.what_happened || "");
+  const key_refs = String(factsObj?.key_refs || "");
+
+  const impact_signals = Array.isArray(signals?.impact_signals) ? signals.impact_signals : [];
+  const feels_off = Array.isArray(signals?.feels_off) ? signals.feels_off : [];
+
+  // normalize risk_scan from v2 premium signals + relationship
+  const risk_scan_src = ctx.risk_scan || s?.risk_scan || {};
+  const impactNorm = (impact_signals.length > 0) ? "high" : "low";
+  const contMap = { ongoing: "high", short_term: "mid", one_time: "low" };
+  const continuityNorm = contMap[relationship?.continuity] || risk_scan_src?.continuity || null;
+
+  // leverage hint
+  const leverage_flag_norm =
+    (impact_signals.includes("they_have_leverage") || feels_off.includes("power_uneven"))
+      ? true
+      : (typeof (ctx.leverage_flag ?? s?.leverage_flag) === "boolean"
+          ? (ctx.leverage_flag ?? s?.leverage_flag)
+          : null);
+
+  // record-safe hint → encode as a constraint token (non-breaking)
+  const record_safe_mode = impact_signals.includes("documentation_sensitivity");
+
+  // situation_type (legacy)
+  const situation_type =
+    ctx.situation_type ||
+    (s?.context_builder?.situation_type) ||
+    null;
+
+  // key_facts (engine/gen anchor): prefer explicit ctx if present, else front facts.what_happened
   const key_facts =
     ctx.key_facts ||
     (s?.context_builder?.key_facts) ||
+    what_happened ||
     s?.facts?.what_happened ||
     "";
 
@@ -151,88 +187,130 @@ function buildPayload(state) {
     (s?.context_builder?.main_concerns) ||
     [];
 
-  const constraints =
+  let constraints =
     ctx.constraints ||
     (s?.context_builder?.constraints) ||
     [];
 
-  // v2 premium state mappings
+  if (!Array.isArray(constraints)) constraints = [];
+  if (record_safe_mode && !constraints.includes("record_safe_mode")) {
+    constraints = [...constraints, "record_safe_mode"];
+  }
+
+  // continuity/happened_before from v2 premium
   const continuity =
     ctx.continuity ??
     s?.continuity ??
-    s?.relationship?.continuity ??
+    relationship?.continuity ??
     null;
 
   const happened_before =
     ctx.happened_before ??
     s?.happened_before ??
     s?.signals?.happened_before ??
+    signals?.happened_before ??
     null;
 
+  // exposure (legacy)
   const exposure = ctx.exposure ?? s?.exposure ?? null;
-  const leverage_flag = ctx.leverage_flag ?? s?.leverage_flag ?? null;
 
-  const user_intent = s?.intent?.value || s?.intent || null;
+  // optional user intent/tone/depth (legacy + v2 premium)
+  const user_intent =
+    s?.intent?.value ||
+    s?.intent ||
+    s?.user_intent ||
+    null;
 
   const user_tone =
     s?.user_tone?.value ||
     s?.user_tone ||
     s?.user_tone_hint ||
     s?.strategy?.tone ||
+    strategyObj?.tone ||
     null;
 
   const user_depth =
     ctx.depth ||
     s?.depth ||
     s?.strategy?.detail ||
+    strategyObj?.detail ||
     null;
 
   const include_analysis = !!(paywall.addon_insight ?? paywall.include_analysis);
+
+  // final execution controls: prefer v2 premium strategy values
+  const toneFinal =
+    s?.tone?.value ||
+    s?.tone ||
+    strategyObj?.tone ||
+    s?.strategy?.tone ||
+    null;
+
+  const detailFinal =
+    s?.detail?.value ||
+    s?.detail ||
+    strategyObj?.detail ||
+    s?.strategy?.detail ||
+    null;
+
+  const directionFinal =
+    s?.direction?.value ||
+    s?.direction ||
+    strategyObj?.direction ||
+    s?.strategy?.direction ||
+    null;
+
+  const actionObjectiveFinal =
+    s?.action_objective?.value ||
+    s?.action_objective ||
+    strategyObj?.action_objective ||
+    s?.strategy?.action_objective ||
+    null;
 
   return {
     package: pkg,
     include_analysis,
     input: {
+      // ✅ passthrough blocks (for premium prompts)
+      target,
+      relationship,
+      signals,
+      facts: {
+        what_happened,
+        key_refs
+      },
+      strategy: {
+        tone: strategyObj?.tone ?? null,
+        detail: strategyObj?.detail ?? null,
+        direction: strategyObj?.direction ?? null,
+        action_objective: strategyObj?.action_objective ?? null
+      },
+
+      // legacy/engine-facing normalized fields
       situation_type,
       risk_scan: {
-        impact: risk_scan.impact || null,
-        continuity: risk_scan.continuity || null
+        impact: risk_scan_src?.impact || impactNorm || null,
+        continuity: continuityNorm
       },
       continuity,
       happened_before,
       exposure: Array.isArray(exposure) ? exposure : (exposure == null ? null : []),
-      leverage_flag: (typeof leverage_flag === "boolean") ? leverage_flag : null,
+      leverage_flag: leverage_flag_norm,
 
       key_facts: String(key_facts || ""),
+      key_refs: String(key_refs || ""),
       main_concerns: Array.isArray(main_concerns) ? main_concerns : [],
       constraints: Array.isArray(constraints) ? constraints : [],
+
       user_intent,
       user_tone,
       user_depth,
 
-      tone:
-        s?.tone?.value ||
-        s?.tone ||
-        s?.strategy?.tone ||
-        null,
-
-      detail:
-        s?.detail?.value ||
-        s?.detail ||
-        s?.strategy?.detail ||
-        null,
-
-      direction:
-        s?.direction?.value ||
-        s?.direction ||
-        s?.strategy?.direction ||
-        null,
-
-      action_objective:
-        s?.action_objective?.value ||
-        s?.action_objective ||
-        s?.strategy?.action_objective ||
-        null
+      // final controls used by resolveFinalControls + QC
+      tone: toneFinal,
+      detail: detailFinal,
+      direction: directionFinal,
+      action_objective: actionObjectiveFinal
     }
   };
 }
@@ -309,137 +387,6 @@ function coerceForQc(packageType, obj) {
   }
   return o;
 }
-
-/* =========================================================
-   SPEED/RELIABILITY: Deterministic normalization BEFORE QC
-   - Fixes: message_paragraphs_must_be_3
-   - Fixes: email_sections_must_be_4 / bundle_email: email_sections_must_be_4
-   ========================================================= */
-
-function normalizeNewlines(s) {
-  return String(s || "").replace(/\r\n/g, "\n").replace(/\r/g, "\n");
-}
-
-function splitBlocksByBlankLines(text) {
-  const t = normalizeNewlines(text).trim();
-  if (!t) return [];
-  return t
-    .split(/\n\s*\n+/g)
-    .map(x => x.trim())
-    .filter(Boolean);
-}
-
-function splitSentences(text) {
-  const t = normalizeNewlines(text).trim();
-  if (!t) return [];
-  // Simple, fast sentence split; good enough for restructuring.
-  const parts = t.split(/(?<=[.!?])\s+/g).map(x => x.trim()).filter(Boolean);
-  return parts.length ? parts : [t];
-}
-
-function joinBlocks(blocks) {
-  return blocks.map(x => String(x || "").trim()).filter(Boolean).join("\n\n");
-}
-
-function ensureExactlyNBlocks(text, n) {
-  if (text == null) return null;
-  let blocks = splitBlocksByBlankLines(text);
-
-  if (blocks.length === n) return joinBlocks(blocks);
-
-  if (blocks.length === 0) {
-    return null;
-  }
-
-  // If too few blocks, split the longest block by sentences until we reach n.
-  while (blocks.length < n) {
-    let idx = 0;
-    let maxLen = 0;
-    for (let i = 0; i < blocks.length; i++) {
-      const L = blocks[i].length;
-      if (L > maxLen) { maxLen = L; idx = i; }
-    }
-    const target = blocks[idx];
-    const sentences = splitSentences(target);
-
-    if (sentences.length >= 2) {
-      // Split roughly in half for stability.
-      const mid = Math.ceil(sentences.length / 2);
-      const a = sentences.slice(0, mid).join(" ").trim();
-      const b = sentences.slice(mid).join(" ").trim();
-      blocks.splice(idx, 1, a, b);
-    } else {
-      // Can't split further; pad with a minimal continuation (keeps intent, avoids new facts)
-      blocks.push("Thank you.");
-    }
-    // Safety break
-    if (blocks.length > n + 10) break;
-  }
-
-  // If too many blocks, merge from the end until we reach n.
-  while (blocks.length > n) {
-    const last = blocks.pop();
-    blocks[blocks.length - 1] = `${blocks[blocks.length - 1]}\n${last}`.trim();
-  }
-
-  return joinBlocks(blocks);
-}
-
-function normalizeMessageTo3Paragraphs(text) {
-  // Message paragraphs are counted as blank-line separated blocks
-  return ensureExactlyNBlocks(text, 3);
-}
-
-function normalizeEmailTo4Sections(emailText) {
-  // Email sections are counted as blank-line separated blocks
-  return ensureExactlyNBlocks(emailText, 4);
-}
-
-function ensureMeta(obj, controls) {
-  const o = (obj && typeof obj === "object") ? obj : {};
-  const meta = (o.meta && typeof o.meta === "object") ? o.meta : {};
-  return {
-    ...o,
-    meta: {
-      tone: meta.tone ?? controls?.tone ?? "neutral",
-      detail: meta.detail ?? controls?.detail ?? "standard",
-      direction: meta.direction ?? controls?.direction ?? "reset"
-    }
-  };
-}
-
-function normalizeForQc(packageType, obj, controls) {
-  let o = ensureMeta(obj, controls);
-
-  if (packageType === "message") {
-    if (typeof o.message_text === "string") {
-      o = { ...o, message_text: normalizeMessageTo3Paragraphs(o.message_text) };
-    }
-    return o;
-  }
-
-  if (packageType === "email") {
-    if (typeof o.email_text === "string") {
-      o = { ...o, email_text: normalizeEmailTo4Sections(o.email_text) };
-    }
-    return o;
-  }
-
-  if (packageType === "bundle") {
-    const out = { ...o };
-    if (typeof out.bundle_message_text === "string") {
-      out.bundle_message_text = normalizeMessageTo3Paragraphs(out.bundle_message_text);
-    }
-    if (typeof out.email_text === "string") {
-      out.email_text = normalizeEmailTo4Sections(out.email_text);
-    }
-    return ensureMeta(out, controls);
-  }
-
-  return o;
-}
-
-/* ========================================================= */
 
 function makeRepairInstruction(packageType, issues, failedObj) {
   const schema =
@@ -577,7 +524,7 @@ module.exports = async (req, res) => {
 
   const requestId = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 
-  async function runMainGeneration(userOverride = "") {
+  async function runMainGeneration(userOverride = "", prevFailedObj = null) {
     const userBlock = userOverride
       ? `${userOverride}\n\n---\n\nPAYLOAD_JSON:\n${JSON.stringify(llmInput)}`
       : `${mainPrompt}\n\n---\n\nPAYLOAD_JSON:\n${JSON.stringify(llmInput)}`;
@@ -598,10 +545,7 @@ module.exports = async (req, res) => {
 
     // coercion BEFORE QC
     const coerced = coerceForQc(payload.package, obj);
-    // deterministic normalization BEFORE QC
-    const normalized = normalizeForQc(payload.package, coerced, controls);
-
-    return { ok: true, obj: normalized, rawObj: obj };
+    return { ok: true, obj: coerced, rawObj: obj };
   }
 
   // 4) Main generation call + QC + 1 repair attempt
@@ -609,13 +553,7 @@ module.exports = async (req, res) => {
   try {
     const first = await runMainGeneration();
     if (!first.ok) {
-      // Format failure is not an upstream outage; return 422
-      return json(res, 422, {
-        ok: false,
-        error: first.error,
-        message: "Model output was not valid JSON",
-        raw: first.raw
-      });
+      return json(res, 502, { ok: false, error: first.error, message: "Model output was not valid JSON", raw: first.raw });
     }
 
     const qc1 = validateOutput(payload.package, first.obj, controls);
@@ -624,7 +562,7 @@ module.exports = async (req, res) => {
     } else {
       // repair attempt (1x) — include failed output
       const repairInstr = makeRepairInstruction(payload.package, qc1.issues, first.rawObj || first.obj);
-      const second = await runMainGeneration(repairInstr);
+      const second = await runMainGeneration(repairInstr, first.rawObj || first.obj);
 
       if (!second.ok) {
         return json(res, 422, {
@@ -635,10 +573,7 @@ module.exports = async (req, res) => {
         });
       }
 
-      // normalize again (repair may still drift on formatting)
-      const normalized2 = normalizeForQc(payload.package, second.obj, controls);
-      const qc2 = validateOutput(payload.package, normalized2, controls);
-
+      const qc2 = validateOutput(payload.package, second.obj, controls);
       if (!qc2.ok) {
         return json(res, 422, {
           ok: false,
@@ -648,7 +583,7 @@ module.exports = async (req, res) => {
         });
       }
 
-      mainObj = normalized2;
+      mainObj = second.obj;
     }
   } catch (e) {
     const msg = String(e?.message || e);
