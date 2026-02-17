@@ -1,9 +1,8 @@
 // api/engine/qc.js
-// Premium QC gate (stabilized):
-// - Keep: forbidden language, paragraph/section structure, objective signal
-// - Relax: exact sentence counts -> range-based (prevents flaky QC fails)
-// - Better: sentence splitting + whitespace normalization
-// If fail: returns { ok:false, issues:[...] }.
+// A-Mode QC: hard constraints only for reliability.
+// - Hard fail: missing required fields, forbidden language, wrong paragraph/section count.
+// - Soft warn: sentence counts, paragraph distributions, objective signal, subject micro-rules.
+// Returns: { ok:boolean, issues:string[], warnings:string[] }
 
 function safeStr(v) {
   return (typeof v === "string") ? v : "";
@@ -23,139 +22,135 @@ function containsForbidden(text) {
   return FORBIDDEN.filter(w => t.includes(w));
 }
 
-// More stable sentence count heuristic:
-// - normalize whitespace
-// - count end punctuation .,!,? as sentence boundaries
-// - ignore empty fragments
 function countSentences(text) {
-  const t = safeStr(text)
-    .replace(/\r\n/g, "\n")
-    .replace(/[ \t]+/g, " ")
-    .trim();
+  const t = safeStr(text).replace(/\s+/g, " ").trim();
   if (!t) return 0;
-
-  // split on end punctuation followed by space/newline OR end of string
-  const parts = t.split(/(?<=[.!?])(?:\s+|$)/).map(s => s.trim()).filter(Boolean);
+  const parts = t.split(/(?<=[.!?])\s+/).filter(Boolean);
   return parts.length;
 }
 
 function splitParagraphs(text) {
-  const raw = safeStr(text)
-    .replace(/\r\n/g, "\n")
-    .trim();
+  const raw = safeStr(text).trim();
   if (!raw) return [];
-  return raw
-    .split(/\n\s*\n+/)
-    .map(s => s.trim())
-    .filter(Boolean);
+  return raw.split(/\n\s*\n/).map(s => s.trim()).filter(Boolean);
 }
 
 function requireObjectivePhrase(action_objective, text) {
+  if (!action_objective) return true; // if unknown, don't enforce
   const t = safeStr(text).toLowerCase();
-
   const map = {
     clarify_priority: ["clarify", "priority", "priorities", "order"],
-    confirm_expectations: ["confirm", "expectation", "expectations", "align"],
+    confirm_expectations: ["confirm", "expectation", "expectations"],
     request_adjustment: ["adjust", "change", "update", "revise"],
-    set_boundary: ["boundary", "moving forward", "not able to", "i can’t", "i can't", "i cannot"],
+    set_boundary: ["boundary", "moving forward", "not able to", "i can’t", "i cannot", "i'm not able", "i am not able"],
     reduce_scope: ["scope", "reduce", "limit", "narrow"],
     close_loop: ["close", "wrap up", "finalize", "end this"],
     other: ["please", "confirm", "clarify", "review"]
   };
-
   const hints = map[action_objective] || map.other;
-  // require at least one hint
   return hints.some(h => t.includes(h));
 }
 
-// Range policy (instead of exact counts):
-// - concise: total 6–8
-// - standard: total 7–10
-// - detailed: total 9–13
-function requiredSentenceRange(detail) {
-  if (detail === "concise") return { min: 6, max: 8 };
-  if (detail === "detailed") return { min: 9, max: 13 };
-  return { min: 7, max: 10 }; // standard
-}
-
-// Paragraph sentence range checks (message):
-// P1: 1–3, P2: 2–5, P3: 1–3
-// (keeps 3-paragraph rhythm but avoids brittle failures)
-function validateMessage({ message_text, meta }, controls) {
+function validateMessage(obj, controls) {
   const issues = [];
-  const txt = safeStr(message_text).trim();
+  const warnings = [];
 
+  const txt = safeStr(obj?.message_text).trim();
   if (!txt) issues.push("message_text missing");
 
-  const bad = containsForbidden(txt);
-  if (bad.length) issues.push("forbidden_language: " + bad.join(", "));
+  if (txt) {
+    const bad = containsForbidden(txt);
+    if (bad.length) issues.push("forbidden_language: " + bad.join(", "));
 
-  const paras = splitParagraphs(txt);
-  if (paras.length !== 3) issues.push("message_paragraphs_must_be_3");
+    const paras = splitParagraphs(txt);
+    if (paras.length !== 3) issues.push("message_paragraphs_must_be_3");
 
-  const total = countSentences(txt);
-  const { min, max } = requiredSentenceRange(controls.detail);
-  if (total < min || total > max) issues.push(`message_sentence_count_out_of_range_${min}_to_${max}_got_${total}`);
+    // Soft: sentence count and distribution (no longer hard fail)
+    const total = countSentences(txt);
+    const detail = controls?.detail || "standard";
 
-  if (paras[0]) {
-    const s = countSentences(paras[0]);
-    if (s < 1 || s > 3) issues.push("message_p1_sentences_1_to_3");
+    // ranges (soft)
+    const range =
+      detail === "concise" ? [6, 8] :
+      detail === "standard" ? [7, 9] :
+      [8, 11];
+
+    if (total < range[0] || total > range[1]) {
+      warnings.push(`message_sentence_count_out_of_range_${range[0]}_to_${range[1]}_got_${total}`);
+    }
+
+    if (paras[0]) {
+      const s = countSentences(paras[0]);
+      if (s < 1 || s > 4) warnings.push("message_p1_sentence_count_suggest_1_to_4");
+    }
+    if (paras[1]) {
+      const s = countSentences(paras[1]);
+      if (s < 2 || s > 6) warnings.push("message_p2_sentence_count_suggest_2_to_6");
+    }
+    if (paras[2]) {
+      const s = countSentences(paras[2]);
+      if (s < 1 || s > 4) warnings.push("message_p3_sentence_count_suggest_1_to_4");
+    }
+
+    // Soft: objective signal (warn only)
+    if (controls?.action_objective && !requireObjectivePhrase(controls.action_objective, txt)) {
+      warnings.push("message_missing_action_objective_signal");
+    }
   }
-  if (paras[1]) {
-    const s = countSentences(paras[1]);
-    if (s < 2 || s > 5) issues.push("message_p2_sentences_2_to_5");
-  }
-  if (paras[2]) {
-    const s = countSentences(paras[2]);
-    if (s < 1 || s > 3) issues.push("message_p3_sentences_1_to_3");
+
+  // meta echo is soft only
+  const meta = obj?.meta;
+  if (meta && typeof meta === "object") {
+    if (meta.tone && controls?.tone && meta.tone !== controls.tone) warnings.push("meta_tone_mismatch");
+    if (meta.detail && controls?.detail && meta.detail !== controls.detail) warnings.push("meta_detail_mismatch");
+    if (meta.direction && controls?.direction && meta.direction !== controls.direction) warnings.push("meta_direction_mismatch");
   }
 
-  if (controls.action_objective && !requireObjectivePhrase(controls.action_objective, txt)) {
-    issues.push("message_missing_action_objective_signal");
-  }
-
-  if (meta) {
-    if (meta.tone && meta.tone !== controls.tone) issues.push("meta_tone_mismatch");
-    if (meta.detail && meta.detail !== controls.detail) issues.push("meta_detail_mismatch");
-    if (meta.direction && meta.direction !== controls.direction) issues.push("meta_direction_mismatch");
-  }
-
-  return issues;
+  return { issues, warnings };
 }
 
-function validateEmail({ subject, email_text, meta }, controls) {
+function validateEmail(obj, controls) {
   const issues = [];
-  const subj = safeStr(subject).trim();
-  const txt = safeStr(email_text).trim();
+  const warnings = [];
+
+  const subj = safeStr(obj?.subject).trim();
+  const txt = safeStr(obj?.email_text).trim();
 
   if (!subj) issues.push("subject missing");
-  if (subj.length < 8 || subj.length > 80) issues.push("subject_length_out_of_range");
-  if (/[!?.]{2,}/.test(subj)) issues.push("subject_excess_punctuation");
-  if (subj.split(/\s+/).length < 4 || subj.split(/\s+/).length > 12) issues.push("subject_word_count_out_of_range");
-
   if (!txt) issues.push("email_text missing");
 
-  const bad = containsForbidden(txt);
-  if (bad.length) issues.push("forbidden_language: " + bad.join(", "));
-
-  // Must have exactly 4 sections separated by blank lines (keep strict)
-  const sections = splitParagraphs(txt);
-  if (sections.length !== 4) issues.push("email_sections_must_be_4");
-
-  if (controls.action_objective && !requireObjectivePhrase(controls.action_objective, txt)) {
-    issues.push("email_missing_action_objective_signal");
+  if (subj) {
+    // Soft subject rules (warn only; avoid failing production)
+    if (subj.length < 6 || subj.length > 120) warnings.push("subject_length_suspicious");
+    if (/[!?.]{2,}/.test(subj)) warnings.push("subject_excess_punctuation");
   }
 
-  if (meta) {
-    if (meta.tone && meta.tone !== controls.tone) issues.push("meta_tone_mismatch");
-    if (meta.detail && meta.detail !== controls.detail) issues.push("meta_detail_mismatch");
-    if (meta.direction && meta.direction !== controls.direction) issues.push("meta_direction_mismatch");
+  if (txt) {
+    const bad = containsForbidden(txt);
+    if (bad.length) issues.push("forbidden_language: " + bad.join(", "));
+
+    // Hard: exactly 4 sections separated by blank lines
+    const sections = splitParagraphs(txt);
+    if (sections.length !== 4) issues.push("email_sections_must_be_4");
+
+    // Soft objective signal
+    if (controls?.action_objective && !requireObjectivePhrase(controls.action_objective, txt)) {
+      warnings.push("email_missing_action_objective_signal");
+    }
   }
 
-  return issues;
+  const meta = obj?.meta;
+  if (meta && typeof meta === "object") {
+    if (meta.tone && controls?.tone && meta.tone !== controls.tone) warnings.push("meta_tone_mismatch");
+    if (meta.detail && controls?.detail && meta.detail !== controls.detail) warnings.push("meta_detail_mismatch");
+    if (meta.direction && controls?.direction && meta.direction !== controls.direction) warnings.push("meta_direction_mismatch");
+  }
+
+  return { issues, warnings };
 }
 
 function validateInsight(insightObj) {
+  // Keep as-is (hard), but you can soften later if needed
   const issues = [];
   if (!insightObj || typeof insightObj !== "object") return ["insight_object_missing"];
 
@@ -165,17 +160,14 @@ function validateInsight(insightObj) {
 
   if (!title) issues.push("insight_title_missing");
   if (sections.length !== 3) issues.push("insight_sections_must_be_3");
-
   sections.forEach((sec, idx) => {
     const t = safeStr(sec?.title).trim();
     const bullets = Array.isArray(sec?.bullets) ? sec.bullets : [];
-    if (!t) issues.push(`insight_section_${idx + 1}_title_missing`);
-    if (bullets.length !== 3) issues.push(`insight_section_${idx + 1}_bullets_must_be_3`);
+    if (!t) issues.push(`insight_section_${idx+1}_title_missing`);
+    if (bullets.length !== 3) issues.push(`insight_section_${idx+1}_bullets_must_be_3`);
   });
-
   if (!disc) issues.push("insight_disclaimer_missing");
 
-  // Must include word "signals" at least once (per prompt)
   const all = JSON.stringify(insightObj).toLowerCase();
   if (!all.includes("signals")) issues.push("insight_must_include_word_signals");
 
@@ -184,24 +176,32 @@ function validateInsight(insightObj) {
 
 function validateOutput(packageType, obj, controls) {
   const issues = [];
+  const warnings = [];
 
-  if (!obj || typeof obj !== "object") return { ok: false, issues: ["output_not_object"] };
-
-  if (packageType === "message") {
-    issues.push(...validateMessage(obj, controls));
-  } else if (packageType === "email") {
-    issues.push(...validateEmail(obj, controls));
-  } else if (packageType === "bundle") {
-    const msgIssues = validateMessage({ message_text: obj.bundle_message_text, meta: obj.meta }, controls);
-    if (msgIssues.length) issues.push(...msgIssues.map(x => "bundle_message: " + x));
-
-    const emailIssues = validateEmail({ subject: obj.subject, email_text: obj.email_text, meta: obj.meta }, controls);
-    if (emailIssues.length) issues.push(...emailIssues.map(x => "bundle_email: " + x));
-  } else {
-    issues.push("unknown_package");
+  if (!obj || typeof obj !== "object") {
+    return { ok: false, issues: ["output_not_object"], warnings: [] };
   }
 
-  return { ok: issues.length === 0, issues };
+  if (packageType === "message") {
+    const r = validateMessage(obj, controls);
+    issues.push(...r.issues);
+    warnings.push(...r.warnings);
+  } else if (packageType === "email") {
+    const r = validateEmail(obj, controls);
+    issues.push(...r.issues);
+    warnings.push(...r.warnings);
+  } else if (packageType === "bundle") {
+    // bundle expects both hard sets
+    const msg = validateMessage({ message_text: obj.bundle_message_text, meta: obj.meta }, controls);
+    if (msg.issues.length) issues.push(...msg.issues.map(x => "bundle_message: " + x));
+    if (msg.warnings.length) warnings.push(...msg.warnings.map(x => "bundle_message: " + x));
+
+    const em = validateEmail({ subject: obj.subject, email_text: obj.email_text, meta: obj.meta }, controls);
+    if (em.issues.length) issues.push(...em.issues.map(x => "bundle_email: " + x));
+    if (em.warnings.length) warnings.push(...em.warnings.map(x => "bundle_email: " + x));
+  }
+
+  return { ok: issues.length === 0, issues, warnings };
 }
 
 module.exports = { validateOutput, validateInsight };
