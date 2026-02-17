@@ -4,11 +4,27 @@ const path = require("path");
 const { computeStrategyMapV1 } = require("../../engine/strategyMapV1");
 
 module.exports = async function handler(req, res) {
+  const debug = req.query?.debug === "1"; // /api/sim/v1/run?debug=1
+  const full = req.query?.full === "1";   // /api/sim/v1/run?full=1
+
   try {
-    // Optional gate (recommended)
-    // if (req.headers["x-sim-key"] !== process.env.SIM_KEY) {
-    //   return res.status(403).json({ ok: false, error: "FORBIDDEN" });
-    // }
+    // 1) Method gate (GET only)
+    if (req.method !== "GET") {
+      return res.status(405).json({
+        ok: false,
+        error: "METHOD_NOT_ALLOWED",
+        message: "Use GET"
+      });
+    }
+
+    // 2) Optional auth gate (recommended for public deployments)
+    // If SIM_KEY is set, require x-sim-key header.
+    if (process.env.SIM_KEY) {
+      const key = req.headers["x-sim-key"];
+      if (!key || key !== process.env.SIM_KEY) {
+        return res.status(403).json({ ok: false, error: "FORBIDDEN" });
+      }
+    }
 
     const matrixPath = path.join(
       process.cwd(),
@@ -18,8 +34,31 @@ module.exports = async function handler(req, res) {
       "simulation_matrix_v1.json"
     );
 
-    const raw = fs.readFileSync(matrixPath, "utf8");
-    const matrix = JSON.parse(raw);
+    // 3) Better file read errors
+    let raw;
+    try {
+      raw = fs.readFileSync(matrixPath, "utf8");
+    } catch (e) {
+      return res.status(500).json({
+        ok: false,
+        error: "MATRIX_READ_FAILED",
+        message: e?.message || String(e),
+        matrixPath: debug ? matrixPath : undefined,
+        stack: debug ? (e?.stack || null) : undefined
+      });
+    }
+
+    let matrix;
+    try {
+      matrix = JSON.parse(raw);
+    } catch (e) {
+      return res.status(400).json({
+        ok: false,
+        error: "MATRIX_PARSE_FAILED",
+        message: e?.message || String(e),
+        matrixPath: debug ? matrixPath : undefined
+      });
+    }
 
     if (!matrix || !Array.isArray(matrix.cases)) {
       return res.status(400).json({
@@ -47,18 +86,27 @@ module.exports = async function handler(req, res) {
       return acc;
     }, {});
 
+    // Light QC summary (quick sanity checks)
+    const qc_summary = {
+      cases: results.length,
+      extreme_count: tier_counts.extreme || 0
+    };
+
+    // 4) Default response is compact; full results only when requested
     return res.status(200).json({
       ok: true,
       version: "1.0",
       count: results.length,
       tier_counts,
-      results
+      qc_summary,
+      results: full ? results : undefined
     });
   } catch (e) {
     return res.status(500).json({
       ok: false,
       error: "SIM_RUN_FAILED",
-      message: e?.message || String(e)
+      message: e?.message || String(e),
+      stack: debug ? (e?.stack || null) : undefined
     });
   }
 };
