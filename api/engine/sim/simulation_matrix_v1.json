@@ -1,0 +1,411 @@
+{
+  "version": "1.0",
+  "notes": "ClearBound Risk Model v1 simulation inputs (25 cases). Signals only. Compute outputs via engine.",
+  "cases": [
+    {
+      "id": "S-001",
+      "label": "All-low baseline",
+      "signals": {
+        "relationship_axis": "social",
+        "risk_impact": "low",
+        "continuity": "low",
+        "prior_conflict": false,
+        "power_asymmetry": false,
+        "written_record_expected": false,
+        "legal_or_liability_context": false,
+        "emotional_volatility": "low",
+        "audience_multiparty": false,
+        "urgency_level": "low"
+      }
+    },
+    {
+      "id": "S-002",
+      "label": "Peripheral + low impact + low continuity",
+      "signals": {
+        "relationship_axis": "peripheral",
+        "risk_impact": "low",
+        "continuity": "low",
+        "prior_conflict": false,
+        "power_asymmetry": false,
+        "written_record_expected": false,
+        "legal_or_liability_context": false,
+        "emotional_volatility": "low",
+        "audience_multiparty": false,
+        "urgency_level": "low"
+      }
+    },
+    {
+      "id": "S-003",
+      "label": "Intimate + low impact + low volatility",
+      "signals": {
+        "relationship_axis": "intimate",
+        "risk_impact": "low",
+        "continuity": "mid",
+        "prior_conflict": false,
+        "power_asymmetry": false,
+        "written_record_expected": false,
+        "legal_or_liability_context": false,
+        "emotional_volatility": "low",
+        "audience_multiparty": false,
+        "urgency_level": "low"
+      }
+    },
+
+    {
+      "id": "S-004",
+      "label": "Escalation-heavy: High volatility only",
+      "signals": {
+        "relationship_axis": "social",
+        "risk_impact": "low",
+        "continuity": "low",
+        "prior_conflict": false,
+        "power_asymmetry": false,
+        "written_record_expected": false,
+        "legal_or_liability_context": false,
+        "emotional_volatility": "high",
+        "audience_multiparty": false,
+        "urgency_level": "low"
+      }
+    },
+    {
+      "id": "S-005",
+      "label": "Escalation-heavy: High continuity only",
+      "signals": {
+        "relationship_axis": "social",
+        "risk_impact": "low",
+        "continuity": "high",
+        "prior_conflict": false,
+        "power_asymmetry": false,
+        "written_record_expected": false,
+        "legal_or_liability_context": false,
+        "emotional_volatility": "low",
+        "audience_multiparty": false,
+        "urgency_level": "low"
+      }
+    },
+    {
+      "id": "S-006",
+      "label": "Escalation-heavy: Prior conflict only",
+      "signals": {
+        "relationship_axis": "social",
+        "risk_impact": "low",
+        "continuity": "mid",
+        "prior_conflict": true,
+        "power_asymmetry": false,
+        "written_record_expected": false,
+        "legal_or_liability_context": false,
+        "emotional_volatility": "low",
+        "audience_multiparty": false,
+        "urgency_level": "low"
+      }
+    },
+    {
+      "id": "S-007",
+      "label": "Escalation-heavy: High volatility + high continuity",
+      "signals": {
+        "relationship_axis": "social",
+        "risk_impact": "low",
+        "continuity": "high",
+        "prior_conflict": false,
+        "power_asymmetry": false,
+        "written_record_expected": false,
+        "legal_or_liability_context": false,
+        "emotional_volatility": "high",
+        "audience_multiparty": false,
+        "urgency_level": "low"
+      }
+    },
+    {
+      "id": "S-008",
+      "label": "Escalation-heavy: volatility high + prior conflict + urgency high",
+      "signals": {
+        "relationship_axis": "social",
+        "risk_impact": "high",
+        "continuity": "high",
+        "prior_conflict": true,
+        "power_asymmetry": false,
+        "written_record_expected": false,
+        "legal_or_liability_context": false,
+        "emotional_volatility": "high",
+        "audience_multiparty": false,
+        "urgency_level": "high"
+      }
+    },
+
+    {
+      "id": "S-009",
+      "label": "Misinterpretation-heavy: Multiparty only",
+      "signals": {
+        "relationship_axis": "social",
+        "risk_impact": "low",
+        "continuity": "low",
+        "prior_conflict": false,
+        "power_asymmetry": false,
+        "written_record_expected": false,
+        "legal_or_liability_context": false,
+        "emotional_volatility": "low",
+        "audience_multiparty": true,
+        "urgency_level": "low"
+      }
+    },
+    {
+      "id": "S-010",
+      "label": "Misinterpretation-heavy: Peripheral + multiparty",
+      "signals": {
+        "relationship_axis": "peripheral",
+        "risk_impact": "low",
+        "continuity": "low",
+        "prior_conflict": false,
+        "power_asymmetry": false,
+        "written_record_expected": false,
+        "legal_or_liability_context": false,
+        "emotional_volatility": "low",
+        "audience_multiparty": true,
+        "urgency_level": "low"
+      }
+    },
+    {
+      "id": "S-011",
+      "label": "Misinterpretation-heavy: Multiparty + urgency high",
+      "signals": {
+        "relationship_axis": "social",
+        "risk_impact": "low",
+        "continuity": "low",
+        "prior_conflict": false,
+        "power_asymmetry": false,
+        "written_record_expected": false,
+        "legal_or_liability_context": false,
+        "emotional_volatility": "low",
+        "audience_multiparty": true,
+        "urgency_level": "high"
+      }
+    },
+    {
+      "id": "S-012",
+      "label": "Misinterpretation-heavy: Written record expected + multiparty",
+      "signals": {
+        "relationship_axis": "social",
+        "risk_impact": "low",
+        "continuity": "mid",
+        "prior_conflict": false,
+        "power_asymmetry": false,
+        "written_record_expected": true,
+        "legal_or_liability_context": false,
+        "emotional_volatility": "low",
+        "audience_multiparty": true,
+        "urgency_level": "low"
+      }
+    },
+    {
+      "id": "S-013",
+      "label": "Misinterpretation-heavy: Volatility high + multiparty + urgency high",
+      "signals": {
+        "relationship_axis": "social",
+        "risk_impact": "high",
+        "continuity": "mid",
+        "prior_conflict": false,
+        "power_asymmetry": false,
+        "written_record_expected": false,
+        "legal_or_liability_context": false,
+        "emotional_volatility": "high",
+        "audience_multiparty": true,
+        "urgency_level": "high"
+      }
+    },
+
+    {
+      "id": "S-014",
+      "label": "Documentation-heavy: Written record expected only",
+      "signals": {
+        "relationship_axis": "social",
+        "risk_impact": "low",
+        "continuity": "low",
+        "prior_conflict": false,
+        "power_asymmetry": false,
+        "written_record_expected": true,
+        "legal_or_liability_context": false,
+        "emotional_volatility": "low",
+        "audience_multiparty": false,
+        "urgency_level": "low"
+      }
+    },
+    {
+      "id": "S-015",
+      "label": "Documentation-heavy: Legal/liability only",
+      "signals": {
+        "relationship_axis": "social",
+        "risk_impact": "high",
+        "continuity": "low",
+        "prior_conflict": false,
+        "power_asymmetry": false,
+        "written_record_expected": false,
+        "legal_or_liability_context": true,
+        "emotional_volatility": "low",
+        "audience_multiparty": false,
+        "urgency_level": "low"
+      }
+    },
+    {
+      "id": "S-016",
+      "label": "Documentation-heavy: Written record + legal/liability",
+      "signals": {
+        "relationship_axis": "social",
+        "risk_impact": "high",
+        "continuity": "mid",
+        "prior_conflict": false,
+        "power_asymmetry": false,
+        "written_record_expected": true,
+        "legal_or_liability_context": true,
+        "emotional_volatility": "low",
+        "audience_multiparty": false,
+        "urgency_level": "low"
+      }
+    },
+    {
+      "id": "S-017",
+      "label": "Documentation-heavy: Written record + power asymmetry",
+      "signals": {
+        "relationship_axis": "social",
+        "risk_impact": "low",
+        "continuity": "mid",
+        "prior_conflict": false,
+        "power_asymmetry": true,
+        "written_record_expected": true,
+        "legal_or_liability_context": false,
+        "emotional_volatility": "low",
+        "audience_multiparty": false,
+        "urgency_level": "low"
+      }
+    },
+    {
+      "id": "S-018",
+      "label": "Documentation-heavy: Written record + legal/liability + power asymmetry",
+      "signals": {
+        "relationship_axis": "social",
+        "risk_impact": "high",
+        "continuity": "mid",
+        "prior_conflict": false,
+        "power_asymmetry": true,
+        "written_record_expected": true,
+        "legal_or_liability_context": true,
+        "emotional_volatility": "low",
+        "audience_multiparty": false,
+        "urgency_level": "low"
+      }
+    },
+
+    {
+      "id": "S-019",
+      "label": "Relationship-break-heavy: Intimate + prior conflict",
+      "signals": {
+        "relationship_axis": "intimate",
+        "risk_impact": "high",
+        "continuity": "mid",
+        "prior_conflict": true,
+        "power_asymmetry": false,
+        "written_record_expected": false,
+        "legal_or_liability_context": false,
+        "emotional_volatility": "medium",
+        "audience_multiparty": false,
+        "urgency_level": "low"
+      }
+    },
+    {
+      "id": "S-020",
+      "label": "Relationship-break-heavy: Personal + continuity high + prior conflict",
+      "signals": {
+        "relationship_axis": "personal",
+        "risk_impact": "high",
+        "continuity": "high",
+        "prior_conflict": true,
+        "power_asymmetry": false,
+        "written_record_expected": false,
+        "legal_or_liability_context": false,
+        "emotional_volatility": "medium",
+        "audience_multiparty": false,
+        "urgency_level": "low"
+      }
+    },
+    {
+      "id": "S-021",
+      "label": "Relationship-break-heavy: Intimate + volatility high",
+      "signals": {
+        "relationship_axis": "intimate",
+        "risk_impact": "high",
+        "continuity": "mid",
+        "prior_conflict": false,
+        "power_asymmetry": false,
+        "written_record_expected": false,
+        "legal_or_liability_context": false,
+        "emotional_volatility": "high",
+        "audience_multiparty": false,
+        "urgency_level": "low"
+      }
+    },
+    {
+      "id": "S-022",
+      "label": "Relationship-break-heavy: Intimate + volatility high + continuity high",
+      "signals": {
+        "relationship_axis": "intimate",
+        "risk_impact": "high",
+        "continuity": "high",
+        "prior_conflict": false,
+        "power_asymmetry": false,
+        "written_record_expected": false,
+        "legal_or_liability_context": false,
+        "emotional_volatility": "high",
+        "audience_multiparty": false,
+        "urgency_level": "low"
+      }
+    },
+
+    {
+      "id": "S-023",
+      "label": "Admission-heavy: Legal/liability + written record",
+      "signals": {
+        "relationship_axis": "social",
+        "risk_impact": "high",
+        "continuity": "mid",
+        "prior_conflict": false,
+        "power_asymmetry": false,
+        "written_record_expected": true,
+        "legal_or_liability_context": true,
+        "emotional_volatility": "low",
+        "audience_multiparty": false,
+        "urgency_level": "low"
+      }
+    },
+    {
+      "id": "S-024",
+      "label": "Admission-heavy: Legal/liability + written record + power asymmetry",
+      "signals": {
+        "relationship_axis": "social",
+        "risk_impact": "high",
+        "continuity": "mid",
+        "prior_conflict": false,
+        "power_asymmetry": true,
+        "written_record_expected": true,
+        "legal_or_liability_context": true,
+        "emotional_volatility": "low",
+        "audience_multiparty": false,
+        "urgency_level": "low"
+      }
+    },
+    {
+      "id": "S-025",
+      "label": "Admission-heavy: Peripheral + legal/liability + written record + urgency high",
+      "signals": {
+        "relationship_axis": "peripheral",
+        "risk_impact": "high",
+        "continuity": "mid",
+        "prior_conflict": false,
+        "power_asymmetry": true,
+        "written_record_expected": true,
+        "legal_or_liability_context": true,
+        "emotional_volatility": "medium",
+        "audience_multiparty": false,
+        "urgency_level": "high"
+      }
+    }
+  ]
+}
