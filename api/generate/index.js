@@ -13,6 +13,9 @@
 // - signals → normalized risk_scan/leverage_flag/record_safe_mode token mapping
 // - facts.key_refs included
 // - preserves existing engine/QC compatibility fields (key_facts, tone/detail/direction/action_objective, etc.)
+// ✅ FIXES (2026-02-17b)
+// - Bundle stability: lower temperature on first pass for bundle
+// - Bundle repair stability: enforce exact 4-section email_text template when email_sections_must_be_4
 
 const { computeEngineDecisions } = require("../engine/compute");
 const { loadPrompt } = require("../engine/promptLoader");
@@ -388,6 +391,11 @@ function coerceForQc(packageType, obj) {
   return o;
 }
 
+// Detects whether we need to enforce the strict 4-section email template in repair
+function needsEmail4SectionFix(issues = []) {
+  return (Array.isArray(issues) ? issues : []).some(x => String(x || "").includes("email_sections_must_be_4"));
+}
+
 function makeRepairInstruction(packageType, issues, failedObj) {
   const schema =
     packageType === "message"
@@ -395,6 +403,33 @@ function makeRepairInstruction(packageType, issues, failedObj) {
       : packageType === "email"
       ? `{"subject":"(string)","email_text":"(string)","meta":{"tone":"(string)","detail":"(string)","direction":"(string)"}}`
       : `{"bundle_message_text":"(string)","subject":"(string)","email_text":"(string)","meta":{"tone":"(string)","detail":"(string)","direction":"(string)"}}`;
+
+  const email4Template =
+    (packageType === "bundle" && needsEmail4SectionFix(issues))
+      ? [
+          "",
+          "EMAIL_TEXT TEMPLATE (EXACTLY 4 SECTIONS):",
+          "IMPORTANT: email_text MUST contain EXACTLY 3 blank lines total (=> 4 sections).",
+          "Do NOT add any extra blank lines anywhere (including before/after).",
+          "",
+          "[SECTION 1 — Greeting (1 sentence)]",
+          "Hello,",
+          "",
+          "[SECTION 2 — Context (2–3 sentences)]",
+          "(Write 2–3 sentences. No blank lines inside.)",
+          "",
+          "[SECTION 3 — Ask / Proposal (3–4 sentences)]",
+          "(Write 3–4 sentences. One primary ask. No blank lines inside.)",
+          "",
+          "[SECTION 4 — Close (EXACTLY 2 sentences)]",
+          "(Write exactly 2 sentences in the SAME paragraph. No signature line. No name. No extra line.)",
+          "",
+          "ABSOLUTE RULES:",
+          "- Do NOT include 'Subject:' inside email_text.",
+          "- Do NOT add a signature line, sender name, title, or contact line.",
+          "- Close must be exactly 2 sentences and must NOT be split by a blank line."
+        ].join("\n")
+      : "";
 
   return [
     "REPAIR TASK:",
@@ -414,7 +449,8 @@ function makeRepairInstruction(packageType, issues, failedObj) {
     "- Do NOT add threats, legal framing, or accusations.",
     "- Use clean blank lines between paragraphs/sections as required.",
     "- Use the EXACT key names in the schema (message_text / email_text / bundle_message_text / subject).",
-    "- Return only JSON."
+    "- Return only JSON.",
+    email4Template
   ].join("\n");
 }
 
@@ -524,10 +560,12 @@ module.exports = async (req, res) => {
 
   const requestId = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 
-  async function runMainGeneration(userOverride = "", prevFailedObj = null) {
+  async function runMainGeneration(userOverride = "") {
     const userBlock = userOverride
       ? `${userOverride}\n\n---\n\nPAYLOAD_JSON:\n${JSON.stringify(llmInput)}`
       : `${mainPrompt}\n\n---\n\nPAYLOAD_JSON:\n${JSON.stringify(llmInput)}`;
+
+    const isBundle = payload.package === "bundle";
 
     const text = await openaiChat({
       model,
@@ -535,7 +573,8 @@ module.exports = async (req, res) => {
       user: userBlock,
       timeoutMs: 22_000,
       requestId,
-      temperature: userOverride ? 0 : 0.2
+      // ✅ bundle stability: lower temp on first pass; repair already uses 0
+      temperature: userOverride ? 0 : (isBundle ? 0.1 : 0.2)
     });
 
     const obj = safeParseJson(text);
@@ -562,7 +601,7 @@ module.exports = async (req, res) => {
     } else {
       // repair attempt (1x) — include failed output
       const repairInstr = makeRepairInstruction(payload.package, qc1.issues, first.rawObj || first.obj);
-      const second = await runMainGeneration(repairInstr, first.rawObj || first.obj);
+      const second = await runMainGeneration(repairInstr);
 
       if (!second.ok) {
         return json(res, 422, {
