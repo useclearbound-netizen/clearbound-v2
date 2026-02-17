@@ -1,7 +1,7 @@
 // api/sim/v1/run.js
 const fs = require("fs");
 const path = require("path");
-const { computeStrategyMapV1 } = require("../../../engine/strategyMapV1");
+const { computeStrategyMapV1 } = require("../../engine/strategyMapV1");
 
 module.exports = async function handler(req, res) {
   try {
