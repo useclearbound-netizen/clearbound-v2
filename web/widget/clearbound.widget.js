@@ -1,51 +1,30 @@
-<script>
-  window.CB_API_URL = "https://clearbound-v2.vercel.app/api/generate";
-</script>
+/* =========================================================
+   ClearBound v2 — Premium Wizard Widget
+   - 7-Step Wizard + Confirm + Unlock + Result
+   - Runs inside: <div class="cb-app" data-cb-app> ... </div>
+   - API: window.CB_API_URL
+   ========================================================= */
 
-<!-- web/widget/clearbound.widget.html -->
-<!-- ClearBound v2 — Premium Wizard (7-Step + Confirm + Unlock + Result)
-     TEST MODE: payment skipped (Generate button)
--->
-
-<div class="cb-app" data-cb-app>
-  <div class="cb-quote" data-cb-quote></div>
-
-  <div class="progress" aria-label="Progress">
-    <div class="progressline" data-cb-steps></div>
-  </div>
-
-  <div class="card" data-cb-host></div>
-
-  <div class="nav" data-cb-nav>
-    <div class="cb-nav-left">
-      <button type="button" data-cb-back class="cb-btn-secondary">Previous Step</button>
-    </div>
-    <div class="cb-nav-right">
-      <button type="button" data-cb-next class="cb-btn-primary">Next Step</button>
-    </div>
-  </div>
-
-  <div data-cb-msg></div>
-</div>
-
-<script>
 (function(){
   const root = document.querySelector("[data-cb-app]");
   if (!root) return;
+
+  // prevent double init (Elementor re-render safe)
   if (root.dataset.cbInit === "1") return;
   root.dataset.cbInit = "1";
 
   const STORAGE_KEY = "cb_state_v2_premium";
   const TOTAL_STEPS = 7;
 
-  const API_URL = (window.CB_API_URL || "").trim() || "https://clearbound-v2-api.vercel.app/api/generate";
+  const API_URL = (window.CB_API_URL || "").trim() || "https://clearbound-v2.vercel.app/api/generate";
+
   const host = root.querySelector("[data-cb-host]");
-  const msg = root.querySelector("[data-cb-msg]");
-  const backBtn = root.querySelector("[data-cb-back]");
-  const nextBtn = root.querySelector("[data-cb-next]");
+  const msg  = root.querySelector("[data-cb-msg]");
+  const backBtn  = root.querySelector("[data-cb-back]");
+  const nextBtn  = root.querySelector("[data-cb-next]");
   const stepsHost = root.querySelector("[data-cb-steps]");
-  const quoteEl = root.querySelector("[data-cb-quote]");
-  const navEl = root.querySelector("[data-cb-nav]");
+  const quoteEl   = root.querySelector("[data-cb-quote]");
+  const navEl     = root.querySelector("[data-cb-nav]");
 
   const LIMITS = { factsMin: 40, factsMax: 1200 };
 
@@ -54,6 +33,7 @@
     t.innerHTML = html.trim();
     return t.content.firstElementChild;
   }
+
   function escapeHtml(s){
     return String(s ?? "")
       .replaceAll("&","&amp;")
@@ -62,17 +42,21 @@
       .replaceAll('"',"&quot;")
       .replaceAll("'","&#039;");
   }
+
   function setMessage(type, text){
+    if (!msg) return;
     msg.innerHTML = "";
     if (!text) return;
     msg.appendChild(el(`<div class="${type}">${escapeHtml(text)}</div>`));
   }
+
   function attachChoose(node, fn){
     node.addEventListener("click", fn);
     node.addEventListener("keydown", (e) => {
       if (e.key === "Enter" || e.key === " ") { e.preventDefault(); fn(); }
     });
   }
+
   function makeTile({ label, desc, active, meta }){
     return el(`
       <div class="cb-tile" role="button" tabindex="0" data-active="${active ? "true":"false"}">
@@ -84,6 +68,7 @@
       </div>
     `);
   }
+
   function makeChoiceTile({ title, desc, active, right }){
     return el(`
       <div class="cb-flag-tile" role="button" tabindex="0" data-active="${active ? "true":"false"}">
@@ -94,7 +79,7 @@
   }
 
   // -------------------------
-  // v2 state
+  // state
   // -------------------------
   const defaultState = () => ({
     version: "cb.v2.premium",
@@ -114,7 +99,7 @@
     },
     facts: {
       what_happened: "",
-      key_refs: ""             // optional short
+      key_refs: ""
     },
     strategy: {
       direction: null,         // maintain|reset|disengage|unsure
@@ -146,9 +131,11 @@
       return defaultState();
     }
   }
+
   function saveState(s){
     try { localStorage.setItem(STORAGE_KEY, JSON.stringify(s)); } catch {}
   }
+
   let state = loadState();
 
   // -------------------------
@@ -167,6 +154,7 @@
     7: "Expression decides how it lands."
   };
 
+  // options
   const feelsOffOptions = [
     { key:"expectation_not_met", label:"An expectation wasn’t met", desc:"Something understood or agreed didn’t happen." },
     { key:"keeps_repeating", label:"This keeps repeating", desc:"You’ve seen this pattern before." },
@@ -253,9 +241,10 @@
     const pkg = state.paywall.package;
     if (!pkg) return null;
     const base = PRICES[pkg];
-    const add = state.paywall.addon_insight ? PRICES.insight : 0;
+    const add  = state.paywall.addon_insight ? PRICES.insight : 0;
     return Number((base + add).toFixed(2));
   }
+
   function formatMoney(n){
     const v = Number(n);
     if (!Number.isFinite(v)) return "$—";
@@ -266,16 +255,16 @@
   // stepper
   // -------------------------
   function buildStepIndicator(){
+    if (!stepsHost) return;
     stepsHost.innerHTML = "";
     for (let i=1;i<=TOTAL_STEPS;i++){
-      const dot = el(`<div class="cb-stepdot" data-dot="${i}" data-state="inactive">${i}</div>`);
-      stepsHost.appendChild(dot);
+      stepsHost.appendChild(el(`<div class="cb-stepdot" data-dot="${i}" data-state="inactive">${i}</div>`));
       if (i < TOTAL_STEPS){
-        const conn = el(`<div class="cb-connector" data-conn="${i}"><i></i></div>`);
-        stepsHost.appendChild(conn);
+        stepsHost.appendChild(el(`<div class="cb-connector" data-conn="${i}"><i></i></div>`));
       }
     }
   }
+
   function updateProgress(){
     if (quoteEl) quoteEl.textContent = stepQuote[step] || "";
     for (let i=1;i<=TOTAL_STEPS;i++){
@@ -299,7 +288,6 @@
 
   function requiredOk(){
     if (screen !== "wizard") return true;
-
     if (step === 1) return !!state.target.recipient_type && !!state.target.power_balance;
     if (step === 2) return !!state.relationship.importance && !!state.relationship.continuity;
     if (step === 3) return (state.signals.happened_before === true || state.signals.happened_before === false);
@@ -313,14 +301,16 @@
   function refreshNav(){
     saveState(state);
     updateProgress();
-    backBtn.style.display = (step === 1) ? "none" : "";
-    nextBtn.textContent = (step === TOTAL_STEPS) ? "Continue" : "Next Step";
-    nextBtn.disabled = !requiredOk();
+    if (backBtn) backBtn.style.display = (step === 1) ? "none" : "";
+    if (nextBtn){
+      nextBtn.textContent = (step === TOTAL_STEPS) ? "Continue" : "Next Step";
+      nextBtn.disabled = !requiredOk();
+    }
   }
 
   function render(){
     setMessage("", "");
-    host.innerHTML = "";
+    if (host) host.innerHTML = "";
 
     setWizardChromeVisible(screen === "wizard");
 
@@ -335,14 +325,13 @@
       if (step === 6) return renderStep6();
       if (step === 7) return renderStep7();
     }
-
     if (screen === "confirm") return renderConfirm();
-    if (screen === "unlock") return renderUnlock();
-    if (screen === "result") return renderResult();
+    if (screen === "unlock")  return renderUnlock();
+    if (screen === "result")  return renderResult();
   }
 
   // -------------------------
-  // Steps
+  // steps
   // -------------------------
   function renderStep1(){
     const wrap = el(`
@@ -435,7 +424,7 @@
     `);
 
     const offGrid = wrap.querySelector("[data-off]");
-    const offCap = wrap.querySelector("[data-offcap]");
+    const offCap  = wrap.querySelector("[data-offcap]");
     function toggleOff(key){
       const arr = state.signals.feels_off || [];
       const has = arr.includes(key);
@@ -446,12 +435,11 @@
       }
       offCap.style.display = "none";
       state.signals.feels_off = has ? arr.filter(x=>x!==key) : [...arr, key];
-      saveState(state);
-      render();
+      saveState(state); render();
     }
     feelsOffOptions.forEach(opt => {
       const tile = el(`
-        <div class="cb-flag-tile" role="button" tabindex="0" data-active="${state.signals.feels_off.includes(opt.key) ? "true":"false"}">
+        <div class="cb-flag-tile" role="button" tabindex="0" data-active="${(state.signals.feels_off||[]).includes(opt.key) ? "true":"false"}">
           <div class="cb-flag-title">${escapeHtml(opt.label)}</div>
           <div class="cb-flag-desc">${escapeHtml(opt.desc)}</div>
         </div>
@@ -461,7 +449,7 @@
     });
 
     const impGrid = wrap.querySelector("[data-imp]");
-    const impCap = wrap.querySelector("[data-impcap]");
+    const impCap  = wrap.querySelector("[data-impcap]");
     function toggleImpact(key){
       const arr = state.signals.impact_signals || [];
       const has = arr.includes(key);
@@ -472,12 +460,11 @@
       }
       impCap.style.display = "none";
       state.signals.impact_signals = has ? arr.filter(x=>x!==key) : [...arr, key];
-      saveState(state);
-      render();
+      saveState(state); render();
     }
     impactOptions.forEach(opt => {
       const tile = el(`
-        <div class="cb-flag-tile" role="button" tabindex="0" data-active="${state.signals.impact_signals.includes(opt.key) ? "true":"false"}">
+        <div class="cb-flag-tile" role="button" tabindex="0" data-active="${(state.signals.impact_signals||[]).includes(opt.key) ? "true":"false"}">
           <div class="cb-flag-title">${escapeHtml(opt.label)}</div>
           <div class="cb-flag-desc">${escapeHtml(opt.desc)}</div>
         </div>
@@ -515,11 +502,11 @@
       </div>
     `);
 
-    const ta = wrap.querySelector("[data-facts]");
+    const ta   = wrap.querySelector("[data-facts]");
     const refs = wrap.querySelector("[data-refs]");
     const warn = wrap.querySelector("[data-warn]");
 
-    ta.value = state.facts.what_happened || "";
+    ta.value   = state.facts.what_happened || "";
     refs.value = state.facts.key_refs || "";
 
     function check(){
@@ -719,8 +706,8 @@
       </div>
     `);
 
-    const pkgGrid = wrap.querySelector("[data-pkgs]");
-    const genBtn = wrap.querySelector("[data-generate]");
+    const pkgGrid  = wrap.querySelector("[data-pkgs]");
+    const genBtn   = wrap.querySelector("[data-generate]");
     const addonBtn = wrap.querySelector("[data-addon]");
 
     function updateGenerateButton(){
@@ -732,11 +719,10 @@
     }
 
     packageOptions.forEach(p => {
-      const active = state.paywall.package === p.key;
       const tile = makeChoiceTile({
         title: p.title,
         desc: p.desc,
-        active,
+        active: state.paywall.package === p.key,
         right: formatMoney(p.price)
       });
       attachChoose(tile, ()=>{ state.paywall.package = p.key; updateGenerateButton(); render(); });
@@ -786,9 +772,9 @@
         }
 
         state.result.message_text = (data?.data?.message_text || "").trim();
-        state.result.subject = (data?.data?.subject || "").trim();
-        state.result.email_text = (data?.data?.email_text || "").trim();
-        state.result.insight = data?.data?.insight || null;
+        state.result.subject      = (data?.data?.subject || "").trim();
+        state.result.email_text   = (data?.data?.email_text || "").trim();
+        state.result.insight      = data?.data?.insight || null;
 
         saveState(state);
         screen = "result";
@@ -828,9 +814,9 @@
   }
 
   function renderResult(){
-    const hasMsg = !!(state.result.message_text || "").trim();
+    const hasMsg   = !!(state.result.message_text || "").trim();
     const hasEmail = !!(state.result.email_text || "").trim();
-    const hasSubj = !!(state.result.subject || "").trim();
+    const hasSubj  = !!(state.result.subject || "").trim();
     const insightObj = normalizeInsightObject(state.result.insight);
     const hasInsight = !!insightObj;
 
@@ -883,7 +869,6 @@
 
     const insWrap = wrap.querySelector("[data-ins]");
     if (insWrap && hasInsight) {
-      // minimal render
       const secs = Array.isArray(insightObj.insight_sections) ? insightObj.insight_sections : [];
       insWrap.innerHTML = `
         <div style="font-weight:900;margin-bottom:10px;">${escapeHtml(insightObj.insight_title || "Strategic Insight")}</div>
@@ -955,23 +940,23 @@
   // -------------------------
   // nav events
   // -------------------------
-  backBtn.addEventListener("click", ()=>{
-    if (screen !== "wizard") return;
-    if (step > 1) step -= 1;
-    render();
-  });
-  nextBtn.addEventListener("click", ()=>{
-    if (screen !== "wizard") return;
-    if (!requiredOk()) return;
-
-    if (step < TOTAL_STEPS) {
-      step += 1;
+  if (backBtn){
+    backBtn.addEventListener("click", ()=>{
+      if (screen !== "wizard") return;
+      if (step > 1) step -= 1;
       render();
-      return;
-    }
-    screen = "confirm";
-    render();
-  });
+    });
+  }
+
+  if (nextBtn){
+    nextBtn.addEventListener("click", ()=>{
+      if (screen !== "wizard") return;
+      if (!requiredOk()) return;
+      if (step < TOTAL_STEPS) { step += 1; render(); return; }
+      screen = "confirm";
+      render();
+    });
+  }
 
   // boot
   buildStepIndicator();
@@ -980,4 +965,3 @@
   step = Math.min(Math.max(step, 1), TOTAL_STEPS);
   render();
 })();
-</script>
