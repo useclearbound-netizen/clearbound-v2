@@ -3,11 +3,11 @@
 // + Insight returns as an object (for UI rendering + human-friendly download formatting)
 // + QC gate + one repair attempt
 // ✅ FIXES
-// - PROMPT path aligned to repo: api/prompts/v2/*.prompt.md
-// - PROMPTS_REF "master" -> auto fallback to "main" once if 404
+// - Uses repo prompt path: prompts/v2/*.prompt.md (matches clearbound-v2 repo structure)
 // - QC_FAILED returns 422 (not 502)
 // - One repair attempt when QC fails (temperature 0)
 // - Better diagnostics: issues returned to UI
+// - MODEL_INSIGHT env supported (alias)
 
 const { computeEngineDecisions } = require("../engine/compute");
 const { loadPrompt } = require("../engine/promptLoader");
@@ -81,7 +81,14 @@ function pickModel(engine, include_analysis) {
   return modelDefault;
 }
 
-async function openaiChat({ model, system, user, timeoutMs = 22_000, requestId = "", temperature = 0.2 }) {
+async function openaiChat({
+  model,
+  system,
+  user,
+  timeoutMs = 22_000,
+  requestId = "",
+  temperature = 0.2
+}) {
   const key = process.env.OPENAI_API_KEY;
   if (!key) throw new Error("OPENAI_API_KEY missing");
 
@@ -191,6 +198,7 @@ function buildPayload(state) {
         impact: risk_scan.impact || null,
         continuity: risk_scan.continuity || null
       },
+
       continuity,
       happened_before,
       exposure: Array.isArray(exposure) ? exposure : (exposure == null ? null : []),
@@ -277,27 +285,6 @@ function makeRepairInstruction(packageType, issues) {
   ].join("\n");
 }
 
-async function loadPromptWithRefFallback(path) {
-  // Primary: env PROMPTS_REF (promptLoader reads it). Fallback: main if 404-ish.
-  try {
-    return await loadPrompt(path);
-  } catch (e) {
-    const msg = String(e?.message || e);
-    const ref = String(process.env.PROMPTS_REF || "main").trim();
-    const is404 = msg.includes("404") || msg.includes("Not Found") || msg.includes("PROMPT_FETCH_FAILED 404");
-
-    // Common failure: ref=master while repo uses main
-    if (is404 && ref === "master") {
-      try {
-        return await loadPrompt(path, { ref: "main" });
-      } catch (e2) {
-        throw e2;
-      }
-    }
-    throw e;
-  }
-}
-
 module.exports = async (req, res) => {
   setCors(req, res);
 
@@ -347,7 +334,7 @@ module.exports = async (req, res) => {
     return json(res, 400, { ok: false, error: "MISSING_PACKAGE" });
   }
 
-  // Facts min gate (UI is 40; keep server gate aligned-ish)
+  // Facts min gate (UI is 40; keep server gate aligned)
   const facts = (payload.input.key_facts || "").trim();
   if (facts.length < 40) {
     return json(res, 400, { ok: false, error: "MISSING_FACTS", message: "Facts too short" });
@@ -369,9 +356,8 @@ module.exports = async (req, res) => {
   const controls = resolveFinalControls(payload, engine);
   const model = pickModel(engine, payload.include_analysis);
 
-  // 2) Load prompts
-  // ✅ IMPORTANT: prompts live at repo-root: api/prompts/v2/*.prompt.md
-  const basePath = "api/prompts/v2";
+  // 2) Load prompts (✅ matches repo: prompts/v2/*.prompt.md)
+  const basePath = "prompts/v2";
   const promptPath =
     payload.package === "message" ? `${basePath}/message.prompt.md` :
     payload.package === "email"   ? `${basePath}/email.prompt.md` :
@@ -384,7 +370,7 @@ module.exports = async (req, res) => {
 
   let mainPrompt;
   try {
-    mainPrompt = await loadPromptWithRefFallback(promptPath);
+    mainPrompt = await loadPrompt(promptPath);
   } catch (e) {
     return json(res, 500, { ok: false, error: "PROMPT_LOAD_FAILED", message: String(e?.message || e) });
   }
@@ -431,13 +417,19 @@ module.exports = async (req, res) => {
   try {
     const first = await runMainGeneration();
     if (!first.ok) {
-      return json(res, 502, { ok: false, error: first.error, message: "Model output was not valid JSON", raw: first.raw });
+      return json(res, 502, {
+        ok: false,
+        error: first.error,
+        message: "Model output was not valid JSON",
+        raw: first.raw
+      });
     }
 
     const qc1 = validateOutput(payload.package, first.obj, controls);
     if (qc1.ok) {
       mainObj = first.obj;
     } else {
+      // repair attempt (1x)
       const repairInstr = makeRepairInstruction(payload.package, qc1.issues);
       const second = await runMainGeneration(repairInstr);
 
@@ -485,9 +477,13 @@ module.exports = async (req, res) => {
   if (payload.include_analysis) {
     let insightPrompt;
     try {
-      insightPrompt = await loadPromptWithRefFallback(`${basePath}/insight.prompt.md`);
+      insightPrompt = await loadPrompt(`${basePath}/insight.prompt.md`);
     } catch (e) {
-      return json(res, 500, { ok: false, error: "INSIGHT_PROMPT_LOAD_FAILED", message: String(e?.message || e) });
+      return json(res, 500, {
+        ok: false,
+        error: "INSIGHT_PROMPT_LOAD_FAILED",
+        message: String(e?.message || e)
+      });
     }
 
     let insightObj = null;
