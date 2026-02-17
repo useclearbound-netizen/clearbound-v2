@@ -2,12 +2,14 @@
 // Full replace: strict CORS gate + robust body parsing + prompt repo support + JSON enforcement
 // + Insight returns as an object (for UI rendering + human-friendly download formatting)
 // + QC gate + one repair attempt
-// ✅ FIXES (2026-02-16)
+// ✅ FIXES (2026-02-16/17)
 // - PROMPT path aligned to repo: prompts/v2/*.prompt.md
 // - QC_FAILED returns 422 (not 502)
 // - One repair attempt when QC fails (temperature 0)
 // - Repair prompt includes the previous (failed) JSON output
 // - QC pre-coercion: accept common alternative keys and normalize BEFORE QC
+// - Hard constraints injected into the LLM user message to reduce "{}" / key drift
+// - Repair explicitly forbids empty JSON and requires non-empty required fields
 
 const { computeEngineDecisions } = require("../engine/compute");
 const { loadPrompt } = require("../engine/promptLoader");
@@ -81,7 +83,17 @@ function pickModel(engine, include_analysis) {
   return modelDefault;
 }
 
-async function openaiChat({ model, system, user, timeoutMs = 22_000, requestId = "", temperature = 0.2 }) {
+// NOTE: chat/completions + response_format json_object can still return {}.
+// We inject hard constraints + forbid empty required fields in prompts to reduce this.
+async function openaiChat({
+  model,
+  system,
+  user,
+  timeoutMs = 22_000,
+  requestId = "",
+  temperature = 0.2,
+  maxTokens = 900
+}) {
   const key = process.env.OPENAI_API_KEY;
   if (!key) throw new Error("OPENAI_API_KEY missing");
 
@@ -100,6 +112,7 @@ async function openaiChat({ model, system, user, timeoutMs = 22_000, requestId =
       body: JSON.stringify({
         model,
         temperature,
+        max_tokens: maxTokens,
         response_format: { type: "json_object" },
         messages: [
           { role: "system", content: system },
@@ -149,7 +162,6 @@ function buildPayload(state) {
     (s?.context_builder?.constraints) ||
     [];
 
-  // v2 premium state mappings
   const continuity =
     ctx.continuity ??
     s?.continuity ??
@@ -303,13 +315,93 @@ function coerceForQc(packageType, obj) {
   return o;
 }
 
-function makeRepairInstruction(packageType, issues, failedObj) {
+function requiredMessageSentences(detail) {
+  return detail === "concise" ? 7 : detail === "standard" ? 8 : 9;
+}
+
+function objectiveHints(action_objective) {
+  const map = {
+    clarify_priority: ["clarify", "priority", "priorities", "order"],
+    confirm_expectations: ["confirm", "expectation", "expectations"],
+    request_adjustment: ["adjust", "change", "update", "revise"],
+    set_boundary: ["boundary", "moving forward", "not able to", "i can't", "i cannot"],
+    reduce_scope: ["scope", "reduce", "limit", "narrow"],
+    close_loop: ["close", "wrap up", "finalize", "end this"],
+    other: ["please", "confirm", "clarify", "review"]
+  };
+  return map[action_objective] || map.other;
+}
+
+// Hard constraint block injected into LLM user message
+function buildConstraintsBlock(packageType, controls) {
+  const forbidden = [
+    "or else", "otherwise i will", "you will regret", "final warning",
+    "lawyer", "illegal", "liability", "sue", "court", "police", "restraining order",
+    "you always", "you never", "obviously", "you're lying", "you are lying"
+  ];
+
+  const objHints = controls?.action_objective ? objectiveHints(controls.action_objective) : [];
+
+  if (packageType === "message") {
+    const total = requiredMessageSentences(controls.detail);
+    return [
+      "OUTPUT CONSTRAINTS (NON-NEGOTIABLE):",
+      "- Return ONE JSON object only.",
+      '- Use EXACT key: "message_text" (string).',
+      "- message_text MUST be non-empty.",
+      "- message_text MUST have EXACTLY 3 paragraphs separated by ONE blank line.",
+      `- Total sentence count MUST be EXACTLY ${total} sentences.`,
+      "- Paragraph sentence counts:",
+      "  - P1: 2–3 sentences",
+      "  - P2: 3–4 sentences",
+      "  - P3: exactly 2 sentences",
+      "- Do not include threats, legal framing, or accusations.",
+      `- Forbidden phrases include: ${forbidden.join(" | ")}`,
+      ...(objHints.length ? [`- Must include at least one objective signal word: ${objHints.join(" / ")}`] : []),
+      "- Do NOT return {} or an empty JSON object.",
+    ].join("\n");
+  }
+
+  if (packageType === "email") {
+    return [
+      "OUTPUT CONSTRAINTS (NON-NEGOTIABLE):",
+      "- Return ONE JSON object only.",
+      '- Use EXACT keys: "subject" (string), "email_text" (string).',
+      "- subject MUST be 8–80 chars, 4–10 words, no repeated punctuation like !! or ..",
+      "- email_text MUST be non-empty.",
+      "- email_text MUST have EXACTLY 4 sections separated by ONE blank line.",
+      "- Do not include threats, legal framing, or accusations.",
+      `- Forbidden phrases include: ${forbidden.join(" | ")}`,
+      ...(objHints.length ? [`- Must include at least one objective signal word: ${objHints.join(" / ")}`] : []),
+      "- Do NOT return {} or an empty JSON object.",
+    ].join("\n");
+  }
+
+  // bundle
+  const total = requiredMessageSentences(controls.detail);
+  return [
+    "OUTPUT CONSTRAINTS (NON-NEGOTIABLE):",
+    "- Return ONE JSON object only.",
+    '- Use EXACT keys: "bundle_message_text" (string), "subject" (string), "email_text" (string).',
+    "- bundle_message_text MUST be non-empty and follow message rules:",
+    "-  - EXACTLY 3 paragraphs separated by ONE blank line.",
+    `-  - Total sentence count EXACTLY ${total} sentences; P1 2–3, P2 3–4, P3 exactly 2.`,
+    "- subject MUST be 8–80 chars, 4–10 words, no repeated punctuation like !! or ..",
+    "- email_text MUST be non-empty and have EXACTLY 4 sections separated by ONE blank line.",
+    "- Do not include threats, legal framing, or accusations.",
+    `- Forbidden phrases include: ${forbidden.join(" | ")}`,
+    ...(objHints.length ? [`- Must include at least one objective signal word: ${objHints.join(" / ")}`] : []),
+    "- Do NOT return {} or an empty JSON object.",
+  ].join("\n");
+}
+
+function makeRepairInstruction(packageType, issues, failedObj, controls) {
   const schema =
     packageType === "message"
-      ? `{"message_text":"(string)","meta":{"tone":"(string)","detail":"(string)","direction":"(string)"}}`
+      ? `{"message_text":"(string)"}`
       : packageType === "email"
-      ? `{"subject":"(string)","email_text":"(string)","meta":{"tone":"(string)","detail":"(string)","direction":"(string)"}}`
-      : `{"bundle_message_text":"(string)","subject":"(string)","email_text":"(string)","meta":{"tone":"(string)","detail":"(string)","direction":"(string)"}}`;
+      ? `{"subject":"(string)","email_text":"(string)"}`
+      : `{"bundle_message_text":"(string)","subject":"(string)","email_text":"(string)"}`;
 
   return [
     "REPAIR TASK:",
@@ -324,12 +416,15 @@ function makeRepairInstruction(packageType, issues, failedObj) {
     "YOUR PREVIOUS (FAILED) JSON OUTPUT:",
     JSON.stringify(failedObj || {}, null, 2),
     "",
+    buildConstraintsBlock(packageType, controls),
+    "",
     "NON-NEGOTIABLE:",
     "- Preserve the same intent, facts, and posture.",
     "- Do NOT add threats, legal framing, or accusations.",
     "- Use clean blank lines between paragraphs/sections as required.",
-    "- Use the EXACT key names in the schema (message_text / email_text / bundle_message_text / subject).",
-    "- Return only JSON."
+    "- Use the EXACT key names shown in the schema.",
+    "- Required fields must be NON-EMPTY strings.",
+    "- Do NOT return {}."
   ].join("\n");
 }
 
@@ -439,10 +534,12 @@ module.exports = async (req, res) => {
 
   const requestId = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 
-  async function runMainGeneration(userOverride = "", prevFailedObj = null) {
+  async function runMainGeneration(userOverride = "", failedObjForRepair = null) {
+    const constraintsBlock = buildConstraintsBlock(payload.package, controls);
+
     const userBlock = userOverride
       ? `${userOverride}\n\n---\n\nPAYLOAD_JSON:\n${JSON.stringify(llmInput)}`
-      : `${mainPrompt}\n\n---\n\nPAYLOAD_JSON:\n${JSON.stringify(llmInput)}`;
+      : `${mainPrompt}\n\n---\n\n${constraintsBlock}\n\n---\n\nPAYLOAD_JSON:\n${JSON.stringify(llmInput)}`;
 
     const text = await openaiChat({
       model,
@@ -450,7 +547,8 @@ module.exports = async (req, res) => {
       user: userBlock,
       timeoutMs: 22_000,
       requestId,
-      temperature: userOverride ? 0 : 0.2
+      temperature: userOverride ? 0 : 0.2,
+      maxTokens: 900
     });
 
     const obj = safeParseJson(text);
@@ -460,7 +558,23 @@ module.exports = async (req, res) => {
 
     // coercion BEFORE QC
     const coerced = coerceForQc(payload.package, obj);
-    return { ok: true, obj: coerced, rawObj: obj };
+
+    // Extra sanity: prevent {} success path
+    if (payload.package === "message") {
+      const mt = (coerced.message_text || "").trim();
+      if (!mt) return { ok: true, obj: coerced, rawObj: obj, emptyRequired: true };
+    } else if (payload.package === "email") {
+      const st = (coerced.subject || "").trim();
+      const et = (coerced.email_text || "").trim();
+      if (!st || !et) return { ok: true, obj: coerced, rawObj: obj, emptyRequired: true };
+    } else {
+      const bt = (coerced.bundle_message_text || "").trim();
+      const st = (coerced.subject || "").trim();
+      const et = (coerced.email_text || "").trim();
+      if (!bt || !st || !et) return { ok: true, obj: coerced, rawObj: obj, emptyRequired: true };
+    }
+
+    return { ok: true, obj: coerced, rawObj: obj, emptyRequired: false };
   }
 
   // 4) Main generation call + QC + 1 repair attempt
@@ -471,12 +585,15 @@ module.exports = async (req, res) => {
       return json(res, 502, { ok: false, error: first.error, message: "Model output was not valid JSON", raw: first.raw });
     }
 
-    const qc1 = validateOutput(payload.package, first.obj, controls);
+    let qc1 = validateOutput(payload.package, first.obj, controls);
+    if (first.emptyRequired) {
+      qc1 = { ok: false, issues: [...(qc1.issues || []), "required_fields_empty_or_missing"] };
+    }
+
     if (qc1.ok) {
       mainObj = first.obj;
     } else {
-      // repair attempt (1x) — include failed output
-      const repairInstr = makeRepairInstruction(payload.package, qc1.issues, first.rawObj || first.obj);
+      const repairInstr = makeRepairInstruction(payload.package, qc1.issues, first.rawObj || first.obj, controls);
       const second = await runMainGeneration(repairInstr, first.rawObj || first.obj);
 
       if (!second.ok) {
@@ -488,7 +605,11 @@ module.exports = async (req, res) => {
         });
       }
 
-      const qc2 = validateOutput(payload.package, second.obj, controls);
+      let qc2 = validateOutput(payload.package, second.obj, controls);
+      if (second.emptyRequired) {
+        qc2 = { ok: false, issues: [...(qc2.issues || []), "required_fields_empty_or_missing"] };
+      }
+
       if (!qc2.ok) {
         return json(res, 422, {
           ok: false,
@@ -537,7 +658,8 @@ module.exports = async (req, res) => {
         user: `${insightPrompt}\n\n---\n\nPAYLOAD_JSON:\n${JSON.stringify(llmInput)}`,
         timeoutMs: 16_000,
         requestId: `${requestId}-insight`,
-        temperature: 0.2
+        temperature: 0.2,
+        maxTokens: 900
       });
 
       const parsed = safeParseJson(insightText);
