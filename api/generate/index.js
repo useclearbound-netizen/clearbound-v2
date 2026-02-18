@@ -16,8 +16,12 @@
 // ✅ FIXES (2026-02-17b)
 // - Bundle stability: lower temperature on first pass for bundle
 // - Bundle repair stability: enforce exact 4-section email_text template when email_sections_must_be_4
+// ✅ FIXES (2026-02-17c)
+// - Strategy Map v1 integration: compute deterministic strategy_map_v1 and inject into llmInput (engine-side).
+// - Optional response passthrough via RETURN_STRATEGYMAP=1 (non-breaking default).
 
 const { computeEngineDecisions } = require("../engine/compute");
+const { computeStrategyMapV1 } = require("../engine/strategyMapV1"); // ✅ NEW
 const { loadPrompt } = require("../engine/promptLoader");
 const { validateOutput, validateInsight } = require("../engine/qc");
 
@@ -130,6 +134,121 @@ async function openaiChat({ model, system, user, timeoutMs = 22_000, requestId =
   } finally {
     clearTimeout(t);
   }
+}
+
+/**
+ * Strategy Map v1 signal builder (best-effort deterministic mapping)
+ * - Does NOT change UI or prompt format; only injects strategy_map_v1 into llmInput.
+ * - Mapping uses existing v2 premium blocks + legacy fields without requiring front changes.
+ */
+function buildSignalsV1(inp = {}) {
+  const relationship = inp.relationship || {};
+  const signals = inp.signals || {};
+  const constraints = Array.isArray(inp.constraints) ? inp.constraints : [];
+  const exposure = Array.isArray(inp.exposure) ? inp.exposure : [];
+
+  // relationship_axis: prefer explicit axis/value, else legacy, else default social
+  const relationship_axis =
+    relationship.axis ||
+    relationship.relationship_axis ||
+    relationship.value ||
+    inp.relationship_axis ||
+    "social";
+
+  // continuity: prefer normalized risk_scan, else relationship continuity, else low
+  const continuity =
+    inp?.risk_scan?.continuity ||
+    relationship.continuity ||
+    inp.continuity ||
+    "low";
+
+  // prior_conflict: prefer happened_before boolean
+  const prior_conflict =
+    inp.happened_before === true ||
+    signals.happened_before === true ||
+    false;
+
+  // power_asymmetry: leverage_flag is the existing deterministic hint
+  const power_asymmetry =
+    inp.leverage_flag === true ||
+    false;
+
+  // written_record_expected: record_safe_mode constraint is our proxy
+  const written_record_expected =
+    constraints.includes("record_safe_mode") ||
+    signals.written_record_expected === true ||
+    false;
+
+  // legal_or_liability_context: allow explicit flag if present in signals (front can add later)
+  const impactSignals = Array.isArray(signals.impact_signals) ? signals.impact_signals : [];
+  const legal_or_liability_context =
+    signals.legal_or_liability_context === true ||
+    impactSignals.includes("legal_liability") ||
+    impactSignals.includes("legal_or_liability") ||
+    false;
+
+  // emotional_volatility: allow explicit enum; fallback low
+  const emotional_volatility =
+    signals.emotional_volatility === "high" ? "high" :
+    signals.emotional_volatility === "medium" ? "medium" :
+    signals.emotional_volatility === "low" ? "low" :
+    "low";
+
+  // audience_multiparty: allow explicit; fallback from exposure tokens
+  const audience_multiparty =
+    signals.audience_multiparty === true ||
+    exposure.includes("coworkers") ||
+    exposure.includes("group") ||
+    exposure.includes("public") ||
+    false;
+
+  // urgency_level: allow explicit enum; fallback low
+  const urgency_level =
+    signals.urgency_level === "high" ? "high" :
+    signals.urgency_level === "medium" ? "medium" :
+    signals.urgency_level === "low" ? "low" :
+    "low";
+
+  // risk_impact: prefer normalized risk_scan impact, else low
+  const risk_impact =
+    inp?.risk_scan?.impact === "high" ? "high" :
+    inp?.risk_scan?.impact === "low" ? "low" :
+    "low";
+
+  return {
+    relationship_axis,
+    risk_impact,
+    continuity,
+    prior_conflict,
+    power_asymmetry,
+    written_record_expected,
+    legal_or_liability_context,
+    emotional_volatility,
+    audience_multiparty,
+    urgency_level
+  };
+}
+
+/**
+ * Apply Strategy Map presets to existing control fields WITHOUT breaking QC constraints.
+ * - Only nudges tone to respect tone_ceiling when user hasn't explicitly set tone.
+ * - Keeps detail/direction/action_objective compatibility as-is (non-breaking).
+ */
+function applyStrategyToControls(controls, payload, strategyMap) {
+  const out = { ...controls };
+  const presets = strategyMap?.strategy_presets || null;
+  if (!presets) return out;
+
+  const userProvidedTone = !!(payload?.input?.tone || payload?.input?.strategy?.tone);
+  if (!userProvidedTone) {
+    const ceiling = String(presets.tone_ceiling || "").toLowerCase();
+    // Map tone_ceiling → existing tone domain (avoid introducing new QC keys)
+    if (ceiling === "warm") out.tone = "warm";
+    else if (ceiling === "neutral") out.tone = "neutral";
+    else if (ceiling === "firm" || ceiling === "hard") out.tone = "firm";
+  }
+
+  return out;
 }
 
 function buildPayload(state) {
@@ -341,6 +460,10 @@ function shouldReturnEngine() {
   return String(process.env.RETURN_ENGINE || "").trim() === "1";
 }
 
+function shouldReturnStrategyMap() {
+  return String(process.env.RETURN_STRATEGYMAP || "").trim() === "1";
+}
+
 function isJsonRequest(req) {
   const ct = String(req.headers?.["content-type"] || "").toLowerCase();
   return ct.includes("application/json");
@@ -509,7 +632,7 @@ module.exports = async (req, res) => {
     return json(res, 400, { ok: false, error: "MISSING_FACTS", message: "Facts too short" });
   }
 
-  // 1) Engine compute
+  // 1) Engine compute (legacy v2 engine)
   const engine = computeEngineDecisions({
     risk_scan: payload.input.risk_scan,
     situation_type: payload.input.situation_type,
@@ -522,7 +645,13 @@ module.exports = async (req, res) => {
     leverage_flag: payload.input.leverage_flag
   });
 
-  const controls = resolveFinalControls(payload, engine);
+  // 1b) Strategy Map v1 compute (deterministic + explainable)
+  const signalsV1 = buildSignalsV1(payload.input);
+  const strategy_map_v1 = computeStrategyMapV1(signalsV1);
+
+  let controls = resolveFinalControls(payload, engine);
+  controls = applyStrategyToControls(controls, payload, strategy_map_v1);
+
   const model = pickModel(engine, payload.include_analysis);
 
   // 2) Load prompts (✅ repo has prompts/v2/*)
@@ -544,7 +673,7 @@ module.exports = async (req, res) => {
     return json(res, 500, { ok: false, error: "PROMPT_LOAD_FAILED", message: String(e?.message || e) });
   }
 
-  // 3) Build LLM input
+  // 3) Build LLM input (inject strategy_map_v1 + normalized v1 signals)
   const llmInput = {
     package: payload.package,
     include_analysis: payload.include_analysis,
@@ -553,7 +682,11 @@ module.exports = async (req, res) => {
       tone: controls.tone,
       detail: controls.detail,
       direction: controls.direction,
-      action_objective: controls.action_objective
+      action_objective: controls.action_objective,
+
+      // ✅ deterministic strategy engine outputs (non-breaking additions)
+      strategy_signals_v1: signalsV1,
+      strategy_map_v1
     },
     engine
   };
@@ -698,7 +831,21 @@ module.exports = async (req, res) => {
   }
 
   const response = { ok: true, data: out };
+
+  // Existing engine passthrough
   if (shouldReturnEngine()) response.engine = engine;
+
+  // ✅ Optional strategy map passthrough (for debugging/explainability)
+  if (shouldReturnStrategyMap()) {
+    response.strategy_signals_v1 = signalsV1;
+    response.strategy_map_v1 = {
+      version: strategy_map_v1?.version || "1.0",
+      risk_profile: strategy_map_v1?.risk_profile || null,
+      strategy_presets: strategy_map_v1?.strategy_presets || null,
+      drivers_count: Array.isArray(strategy_map_v1?.drivers) ? strategy_map_v1.drivers.length : 0,
+      drivers: strategy_map_v1?.drivers || []
+    };
+  }
 
   return json(res, 200, response);
 };
